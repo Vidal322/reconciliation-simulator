@@ -3,20 +3,20 @@ use std::time::Duration;
 
 pub struct Element {
     pub digest: u64,
-    pub payload: Vec<u8>
+    pub payload: Vec<u8>,
 }
 
 impl Element {
-    pub fn new(digest: u64, payload:Vec<u8>) -> Self {
+    pub fn new(digest: u64, payload: Vec<u8>) -> Self {
         Self { digest, payload }
     }
-    
+
     pub fn payload_len(&self) -> usize {
-        self.payload.len()    
+        self.payload.len()
     }
 }
 
-#[derive(Copy, Eq, Default)]
+#[derive(Eq, Default)]
 pub enum ReplicaPhase {
     #[default]
     Idle,
@@ -53,23 +53,65 @@ impl ReplicaStats {
     pub fn record_elements_added(&mut self, count: usize) {
         self.elements_added += count;
     }
+}
 
 pub struct Replica {
     pub id: usize,
     pub set: HashSet<Element>,
     pub phase: ReplicaPhase,
-    pub stats: ReplicaStats
+    pub stats: ReplicaStats,
 }
 
 impl Replica {
-        pub fn new(id: usize, set: HashSet<Element>):
-            Self {
-                id, 
-                set,
-                ReplicaPhase::default()
-                ReplicaStats::default()
+    pub fn new(id: usize, set: HashSet<Element>) -> Self {
+        Self {
+            id,
+            set,
+            phase: ReplicaPhase::default(),
+            stats: ReplicaStats::default(),
+        };
+    }
+
+    pub fn set_phase(&mut self, phase: ReplicaPhase) {
+        self.phase = phase;
+    }
+
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
+    pub fn contains(&self, element: &Element) -> bool {
+        self.set.contains(element)
+    }
+
+    pub fn insert(&mut self, element: &Element) -> bool {
+        let inserted = self.set.insert(element);
+
+        if (inserted) {
+            self.stats.record_elements_added(1);
+        }
+        inserted
+    }
+
+    pub fn extend<I>(&mut self, elements: I) -> usize
+    where
+        I: IntoIterator<Item = Element>,
+    {
+        let mut added = 0;
+        for element in elements {
+            if (self.set.insert(element)) {
+                added += 1;
             }
+        }
 
+        if (added > 0) {
+            self.stats.record_elements_added(added)
+        }
+
+        added
+    }
 }
-
-
