@@ -155,9 +155,7 @@ impl Simulation {
             .collect::<Vec<_>>();
 
         for (replica, next_set) in self.replicas.iter_mut().zip(next_sets) {
-            let added = next_set.difference(&replica.set).count();
-            replica.stats.record_elements_added(added);
-            replica.set = next_set;
+            replica.replace_set(next_set);
         }
 
         if self.has_converged() {

@@ -82,6 +82,12 @@ impl Replica {
         self.phase = phase;
     }
 
+    pub fn replace_set(&mut self, next_set: HashSet<Element>) {
+        let added = next_set.difference(&self.set).count();
+        self.stats.record_elements_added(added);
+        self.set = next_set;
+    }
+
     pub fn len(&self) -> usize {
         self.set.len()
     }
