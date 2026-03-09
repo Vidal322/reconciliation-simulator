@@ -1,11 +1,11 @@
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TopologyKind {
     Star,
     Tree,
     Chord,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Topology {
     pub kind: TopologyKind,
     pub num_nodes: usize,

@@ -56,7 +56,7 @@ impl ReplicaStats {
         self.elements_added += count;
     }
 }
-
+#[derive(Debug)]
 pub struct Replica {
     pub id: usize,
     pub set: HashSet<Element>,
@@ -72,6 +72,10 @@ impl Replica {
             phase: ReplicaPhase::default(),
             stats: ReplicaStats::default(),
         }
+    }
+
+    pub fn snapshot_set(&self) -> HashSet<Element> {
+        self.set.clone()
     }
 
     pub fn set_phase(&mut self, phase: ReplicaPhase) {
