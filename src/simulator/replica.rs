@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Element {
     pub digest: u64,
     pub payload: Vec<u8>,
@@ -16,7 +17,7 @@ impl Element {
     }
 }
 
-#[derive(Eq, Default)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Default)]
 pub enum ReplicaPhase {
     #[default]
     Idle,
@@ -25,6 +26,7 @@ pub enum ReplicaPhase {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Default)]
 pub struct ReplicaStats {
     pub bytes_sent: usize,
     pub bytes_received: usize,
@@ -69,7 +71,7 @@ impl Replica {
             set,
             phase: ReplicaPhase::default(),
             stats: ReplicaStats::default(),
-        };
+        }
     }
 
     pub fn set_phase(&mut self, phase: ReplicaPhase) {
@@ -88,10 +90,10 @@ impl Replica {
         self.set.contains(element)
     }
 
-    pub fn insert(&mut self, element: &Element) -> bool {
+    pub fn insert(&mut self, element: Element) -> bool {
         let inserted = self.set.insert(element);
 
-        if (inserted) {
+        if inserted {
             self.stats.record_elements_added(1);
         }
         inserted
@@ -103,12 +105,12 @@ impl Replica {
     {
         let mut added = 0;
         for element in elements {
-            if (self.set.insert(element)) {
+            if self.set.insert(element) {
                 added += 1;
             }
         }
 
-        if (added > 0) {
+        if added > 0 {
             self.stats.record_elements_added(added)
         }
 

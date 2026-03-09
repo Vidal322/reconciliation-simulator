@@ -1,4 +1,4 @@
-#[derive(Clone, Eq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum TopologyKind {
     Star,
     Tree,
