@@ -1,3 +1,4 @@
+use crate::simulator::metrics::{MetricsCollector, MetricsSnapshot};
 use crate::simulator::protocols::{Protocol, ProtocolKind, full_state_transfer::FullStateTransfer};
 use crate::simulator::replica::{Element, Replica, ReplicaPhase};
 use crate::simulator::topology::{Topology, TopologyKind};
@@ -19,6 +20,7 @@ pub struct Simulation {
     replicas: Vec<Replica>,
     topology: Box<Topology>,
     protocol: Box<dyn Protocol>,
+    metrics: MetricsCollector,
     target_union: HashSet<Element>,
     current_round: usize,
 }
@@ -44,6 +46,7 @@ pub struct SimulationResult {
     pub topology: TopologyKind,
     pub protocol: ProtocolKind,
     pub converged: bool,
+    pub metrics: MetricsSnapshot,
 }
 
 impl Simulation {
@@ -61,7 +64,7 @@ impl Simulation {
             config.topology,
             config.workload.num_replicas,
         ));
-        //TODO: change once, protocols are implemented
+
         let protocol: Box<dyn Protocol> = match config.protocol {
             ProtocolKind::FullStateTransfer => Box::new(FullStateTransfer::new()),
             ProtocolKind::HybridRbfRiblt => {
@@ -80,6 +83,7 @@ impl Simulation {
             replicas,
             topology,
             protocol,
+            metrics: MetricsCollector::new(),
             target_union: workload.target_union,
             current_round: 0,
         }
@@ -88,6 +92,8 @@ impl Simulation {
     pub fn run(&mut self) -> SimulationResult {
         if self.has_converged() {
             self.mark_converged();
+            let metrics = self.finalize_metrics();
+
             return SimulationResult {
                 status: RunStatus::Converged,
                 rounds: self.current_round,
@@ -95,6 +101,7 @@ impl Simulation {
                 topology: self.config.topology,
                 protocol: self.config.protocol,
                 converged: true,
+                metrics,
             };
         }
 
@@ -103,6 +110,8 @@ impl Simulation {
                 RoundOutcome::Continue => {}
                 RoundOutcome::Converged => {
                     self.mark_converged();
+                    let metrics = self.finalize_metrics();
+
                     return SimulationResult {
                         status: RunStatus::Converged,
                         rounds: self.current_round,
@@ -110,9 +119,12 @@ impl Simulation {
                         topology: self.config.topology,
                         protocol: self.config.protocol,
                         converged: true,
+                        metrics,
                     };
                 }
                 RoundOutcome::RoundCapReached => {
+                    let metrics = self.finalize_metrics();
+
                     return SimulationResult {
                         status: RunStatus::RoundCapReached,
                         rounds: self.current_round,
@@ -120,6 +132,7 @@ impl Simulation {
                         topology: self.config.topology,
                         protocol: self.config.protocol,
                         converged: false,
+                        metrics,
                     };
                 }
             }
@@ -142,6 +155,8 @@ impl Simulation {
             .collect::<Vec<_>>();
 
         for (replica, next_set) in self.replicas.iter_mut().zip(next_sets) {
+            let added = next_set.difference(&replica.set).count();
+            replica.stats.record_elements_added(added);
             replica.set = next_set;
         }
 
@@ -158,6 +173,12 @@ impl Simulation {
         self.replicas
             .iter()
             .all(|replica| replica.set == self.target_union)
+    }
+
+    fn finalize_metrics(&mut self) -> MetricsSnapshot {
+        self.metrics.set_rounds(self.current_round);
+        self.metrics.record_replicas(&self.replicas);
+        self.metrics.snapshot()
     }
 
     fn mark_active(&mut self) {

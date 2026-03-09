@@ -41,10 +41,37 @@ fn main() {
         println!("Rounds: {}", result.rounds);
         println!("Replicas: {}", result.num_replicas);
         println!("Target union size: {}", simulation.target_union().len());
-        println!("Protocol: {}", simulation.protocol());
+        println!("Protocol: {:?}", result.protocol);
         println!("Edges: {}", simulation.topology().edge_count());
 
-        println!("Final replica sizes:");
+        println!("\n=== Metrics ===");
+        println!("Recorded rounds: {}", result.metrics.rounds);
+        println!("Total bytes sent: {}", result.metrics.total_bytes_sent);
+        println!(
+            "Total bytes received: {}",
+            result.metrics.total_bytes_received
+        );
+        println!("Total encode time: {:?}", result.metrics.total_encode_time);
+        println!("Total decode time: {:?}", result.metrics.total_decode_time);
+        println!(
+            "Total elements added: {}",
+            result.metrics.total_elements_added
+        );
+
+        println!("\nPer-node metrics:");
+        for node in &result.metrics.per_node {
+            println!(
+                "  Replica {} -> bytes_sent={}, bytes_received={}, encode_time={:?}, decode_time={:?}, elements_added={}",
+                node.replica_id,
+                node.bytes_sent,
+                node.bytes_received,
+                node.encode_time,
+                node.decode_time,
+                node.elements_added
+            );
+        }
+
+        println!("\nFinal replica sizes:");
         for replica in simulation.replicas() {
             println!(
                 "  Replica {} -> size={}, phase={:?}",
