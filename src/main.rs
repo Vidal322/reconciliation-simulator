@@ -1,6 +1,7 @@
 mod simulator;
 
 use simulator::engine::{Simulation, SimulationConfig};
+use simulator::protocols::ProtocolKind;
 use simulator::topology::TopologyKind;
 use simulator::workload::{DivergencePattern, WorkloadConfig};
 
@@ -27,6 +28,7 @@ fn main() {
             round_cap: 20,
             seed: 42,
             topology,
+            protocol: ProtocolKind::FullStateTransfer,
             workload,
         };
 
@@ -39,6 +41,7 @@ fn main() {
         println!("Rounds: {}", result.rounds);
         println!("Replicas: {}", result.num_replicas);
         println!("Target union size: {}", simulation.target_union().len());
+        println!("Protocol: {}", simulation.protocol());
         println!("Edges: {}", simulation.topology().edge_count());
 
         println!("Final replica sizes:");

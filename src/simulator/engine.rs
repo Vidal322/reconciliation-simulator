@@ -1,3 +1,4 @@
+use crate::simulator::protocols::{Protocol, ProtocolKind, full_state_transfer::FullStateTransfer};
 use crate::simulator::replica::{Element, Replica, ReplicaPhase};
 use crate::simulator::topology::{Topology, TopologyKind};
 use crate::simulator::workload::{Workload, WorkloadConfig};
@@ -10,13 +11,14 @@ pub struct SimulationConfig {
     pub seed: u64,
     pub topology: TopologyKind,
     pub workload: WorkloadConfig,
+    pub protocol: ProtocolKind,
 }
 
-#[derive(Debug)]
 pub struct Simulation {
     config: SimulationConfig,
     replicas: Vec<Replica>,
     topology: Box<Topology>,
+    protocol: Box<dyn Protocol>,
     target_union: HashSet<Element>,
     current_round: usize,
 }
@@ -40,6 +42,7 @@ pub struct SimulationResult {
     pub rounds: usize,
     pub num_replicas: usize,
     pub topology: TopologyKind,
+    pub protocol: ProtocolKind,
     pub converged: bool,
 }
 
@@ -58,11 +61,25 @@ impl Simulation {
             config.topology,
             config.workload.num_replicas,
         ));
+        //TODO: change once, protocols are implemented
+        let protocol: Box<dyn Protocol> = match config.protocol {
+            ProtocolKind::FullStateTransfer => Box::new(FullStateTransfer::new()),
+            ProtocolKind::HybridRbfRiblt => {
+                panic!("HybridRbfRiblt not implemented yet")
+            }
+            ProtocolKind::Riblt => {
+                panic!("Riblt not implemented yet")
+            }
+            ProtocolKind::StaticBfIblt => {
+                panic!("StaticBfIblt not implemented yet")
+            }
+        };
 
         Self {
             config,
             replicas,
             topology,
+            protocol,
             target_union: workload.target_union,
             current_round: 0,
         }
@@ -76,6 +93,7 @@ impl Simulation {
                 rounds: self.current_round,
                 num_replicas: self.replicas.len(),
                 topology: self.config.topology,
+                protocol: self.config.protocol,
                 converged: true,
             };
         }
@@ -90,6 +108,7 @@ impl Simulation {
                         rounds: self.current_round,
                         num_replicas: self.replicas.len(),
                         topology: self.config.topology,
+                        protocol: self.config.protocol,
                         converged: true,
                     };
                 }
@@ -99,6 +118,7 @@ impl Simulation {
                         rounds: self.current_round,
                         num_replicas: self.replicas.len(),
                         topology: self.config.topology,
+                        protocol: self.config.protocol,
                         converged: false,
                     };
                 }
@@ -114,11 +134,11 @@ impl Simulation {
         self.current_round += 1;
         self.mark_active();
 
-        // Placeholder:
-        // In each round, every replica learns the union of its own set and all
-        // directly connected neighbors' sets.
         let next_sets = (0..self.replicas.len())
-            .map(|replica_id| self.compute_next_set(replica_id))
+            .map(|replica_id| {
+                self.protocol
+                    .next_set(replica_id, &self.replicas, &self.topology)
+            })
             .collect::<Vec<_>>();
 
         for (replica, next_set) in self.replicas.iter_mut().zip(next_sets) {
@@ -132,16 +152,6 @@ impl Simulation {
         } else {
             RoundOutcome::Continue
         }
-    }
-
-    fn compute_next_set(&self, replica_id: usize) -> HashSet<Element> {
-        let mut merged = self.replicas[replica_id].snapshot_set();
-
-        for &neighbor_id in self.topology.neighbors(replica_id) {
-            merged.extend(self.replicas[neighbor_id].set.iter().cloned());
-        }
-
-        merged
     }
 
     fn has_converged(&self) -> bool {
@@ -168,6 +178,10 @@ impl Simulation {
 
     pub fn topology(&self) -> &Topology {
         &self.topology
+    }
+
+    pub fn protocol(&self) -> ProtocolKind {
+        self.protocol.kind()
     }
 
     pub fn current_round(&self) -> usize {
