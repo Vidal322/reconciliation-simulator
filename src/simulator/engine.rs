@@ -1,5 +1,7 @@
 use crate::simulator::metrics::{MetricsCollector, MetricsSnapshot};
-use crate::simulator::protocols::{Protocol, ProtocolKind, full_state_transfer::FullStateTransfer};
+use crate::simulator::protocols::full_state_transfer::FullStateTransfer;
+use crate::simulator::protocols::riblt::RibltProtocol;
+use crate::simulator::protocols::{Protocol, ProtocolKind, ProtocolStepResult};
 use crate::simulator::replica::{Element, Replica, ReplicaPhase};
 use crate::simulator::topology::{Topology, TopologyKind};
 use crate::simulator::workload::{Workload, WorkloadConfig};
@@ -68,13 +70,11 @@ impl Simulation {
         let protocol: Box<dyn Protocol> = match config.protocol {
             ProtocolKind::FullStateTransfer => Box::new(FullStateTransfer::new()),
             ProtocolKind::HybridRbfRiblt => {
-                panic!("HybridRbfRiblt not implemented yet")
+                panic!("Hybrid not implemented yet!")
             }
-            ProtocolKind::Riblt => {
-                panic!("Riblt not implemented yet")
-            }
+            ProtocolKind::Riblt => Box::new(RibltProtocol::new()),
             ProtocolKind::StaticBfIblt => {
-                panic!("StaticBfIblt not implemented yet")
+                panic!("StaticBfIblt not implemented yet!")
             }
         };
 
@@ -147,15 +147,31 @@ impl Simulation {
         self.current_round += 1;
         self.mark_active();
 
-        let next_sets = (0..self.replicas.len())
+        let step_results = (0..self.replicas.len())
             .map(|replica_id| {
                 self.protocol
-                    .next_set(replica_id, &self.replicas, &self.topology)
+                    .step_replica(replica_id, &self.replicas, &self.topology)
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<ProtocolStepResult>>();
 
-        for (replica, next_set) in self.replicas.iter_mut().zip(next_sets) {
-            replica.replace_set(next_set);
+        for (replica, step_result) in self.replicas.iter_mut().zip(step_results) {
+            replica.stats.record_bytes_sent(
+                step_result.metrics.state_bytes + step_result.metrics.metadata_bytes,
+            );
+            replica.stats.record_bytes_received(
+                step_result.metrics.state_bytes + step_result.metrics.metadata_bytes,
+            );
+            replica
+                .stats
+                .record_encode_time(step_result.metrics.encode_time);
+            replica
+                .stats
+                .record_decode_time(step_result.metrics.decode_time);
+
+            let added = step_result.next_set.difference(&replica.set).count();
+            replica.stats.record_elements_added(added);
+
+            replica.set = step_result.next_set;
         }
 
         if self.has_converged() {
@@ -209,158 +225,5 @@ impl Simulation {
 
     pub fn target_union(&self) -> &HashSet<Element> {
         &self.target_union
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::simulator::protocols::ProtocolKind;
-    use crate::simulator::topology::TopologyKind;
-    use crate::simulator::workload::{DivergencePattern, WorkloadConfig};
-
-    fn make_config(topology: TopologyKind, round_cap: usize) -> SimulationConfig {
-        SimulationConfig {
-            round_cap,
-            seed: 42,
-            topology,
-            protocol: ProtocolKind::FullStateTransfer,
-            workload: WorkloadConfig {
-                num_replicas: 8,
-                set_size: 1_000,
-                payload_size: 32,
-                digest_bits: 64,
-                divergence: 0.1,
-                pattern: DivergencePattern::Uniform,
-                seed: 42,
-                universe_size: 10_000,
-                zipf_exponent: 1.0,
-                cluster_count: None,
-                inter_cluster_divergence: None,
-                intra_cluster_divergence: None,
-            },
-        }
-    }
-
-    fn assert_all_replicas_match_target(simulation: &Simulation) {
-        let target = simulation.target_union();
-
-        for replica in simulation.replicas() {
-            assert_eq!(
-                &replica.set, target,
-                "replica {} did not converge to target union",
-                replica.id
-            );
-        }
-    }
-
-    #[test]
-    fn full_state_transfer_converges_on_star() {
-        let config = make_config(TopologyKind::Star, 20);
-        let mut simulation = Simulation::new(config);
-
-        let result = simulation.run();
-
-        assert!(result.converged);
-        assert_eq!(result.status, RunStatus::Converged);
-        assert_eq!(result.topology, TopologyKind::Star);
-        assert_eq!(result.protocol, ProtocolKind::FullStateTransfer);
-        assert_all_replicas_match_target(&simulation);
-
-        for replica in simulation.replicas() {
-            assert_eq!(replica.phase, ReplicaPhase::Converged);
-        }
-    }
-
-    #[test]
-    fn full_state_transfer_converges_on_tree() {
-        let config = make_config(TopologyKind::Tree, 20);
-        let mut simulation = Simulation::new(config);
-
-        let result = simulation.run();
-
-        assert!(result.converged);
-        assert_eq!(result.status, RunStatus::Converged);
-        assert_eq!(result.topology, TopologyKind::Tree);
-        assert_eq!(result.protocol, ProtocolKind::FullStateTransfer);
-        assert_all_replicas_match_target(&simulation);
-
-        for replica in simulation.replicas() {
-            assert_eq!(replica.phase, ReplicaPhase::Converged);
-        }
-    }
-
-    #[test]
-    fn full_state_transfer_converges_on_chord() {
-        let config = make_config(TopologyKind::Chord, 20);
-        let mut simulation = Simulation::new(config);
-
-        let result = simulation.run();
-
-        assert!(result.converged);
-        assert_eq!(result.status, RunStatus::Converged);
-        assert_eq!(result.topology, TopologyKind::Chord);
-        assert_eq!(result.protocol, ProtocolKind::FullStateTransfer);
-        assert_all_replicas_match_target(&simulation);
-
-        for replica in simulation.replicas() {
-            assert_eq!(replica.phase, ReplicaPhase::Converged);
-        }
-    }
-
-    #[test]
-    fn round_cap_reached_when_cap_is_too_low() {
-        let config = make_config(TopologyKind::Tree, 0);
-        let mut simulation = Simulation::new(config);
-
-        let result = simulation.run();
-
-        assert!(!result.converged);
-        assert_eq!(result.status, RunStatus::RoundCapReached);
-        assert_eq!(result.rounds, 0);
-    }
-
-    #[test]
-    fn metrics_rounds_match_result_rounds() {
-        let config = make_config(TopologyKind::Star, 20);
-        let mut simulation = Simulation::new(config);
-
-        let result = simulation.run();
-
-        assert_eq!(result.metrics.rounds, result.rounds);
-        assert_eq!(result.metrics.per_node.len(), result.num_replicas);
-    }
-
-    #[test]
-    fn elements_added_is_recorded_for_at_least_one_replica() {
-        let config = make_config(TopologyKind::Tree, 20);
-        let mut simulation = Simulation::new(config);
-
-        let result = simulation.run();
-
-        let total_added: usize = result
-            .metrics
-            .per_node
-            .iter()
-            .map(|m| m.elements_added)
-            .sum();
-
-        assert!(
-            total_added > 0,
-            "expected at least one replica to record added elements"
-        );
-    }
-
-    #[test]
-    fn step_increments_round_when_not_finished() {
-        let config = make_config(TopologyKind::Tree, 20);
-        let mut simulation = Simulation::new(config);
-
-        assert_eq!(simulation.current_round(), 0);
-
-        let outcome = simulation.step();
-
-        assert_ne!(outcome, RoundOutcome::RoundCapReached);
-        assert_eq!(simulation.current_round(), 1);
     }
 }

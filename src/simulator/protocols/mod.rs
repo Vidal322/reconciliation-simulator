@@ -1,7 +1,9 @@
 pub mod full_state_transfer;
+pub mod riblt;
 
 use std::collections::HashSet;
 use std::fmt;
+use std::time::Duration;
 
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
@@ -25,13 +27,29 @@ impl fmt::Display for ProtocolKind {
         write!(f, "{s}")
     }
 }
+
+#[derive(Clone, Debug, Default)]
+pub struct ProtocolMetrics {
+    pub state_bytes: usize,
+    pub metadata_bytes: usize,
+    pub encode_time: Duration,
+    pub decode_time: Duration,
+    pub false_matches: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ProtocolStepResult {
+    pub next_set: HashSet<Element>,
+    pub metrics: ProtocolMetrics,
+}
+
 pub trait Protocol {
     fn kind(&self) -> ProtocolKind;
 
-    fn next_set(
+    fn step_replica(
         &self,
         replica_id: usize,
         replicas: &[Replica],
         topology: &Topology,
-    ) -> HashSet<Element>;
+    ) -> ProtocolStepResult;
 }

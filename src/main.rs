@@ -28,7 +28,7 @@ fn main() {
             round_cap: 20,
             seed: 42,
             topology,
-            protocol: ProtocolKind::FullStateTransfer,
+            protocol: ProtocolKind::Riblt,
             workload,
         };
 
