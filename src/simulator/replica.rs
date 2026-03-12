@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Element {
     pub digest: u64,
     pub payload: Vec<u8>,
@@ -17,7 +17,7 @@ impl Element {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ReplicaPhase {
     #[default]
     Idle,
@@ -26,22 +26,32 @@ pub enum ReplicaPhase {
     Failed,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ReplicaStats {
-    pub bytes_sent: usize,
-    pub bytes_received: usize,
+    pub state_bytes_sent: usize,
+    pub state_bytes_received: usize,
+    pub metadata_bytes_sent: usize,
+    pub metadata_bytes_received: usize,
     pub encode_time: Duration,
     pub decode_time: Duration,
     pub elements_added: usize,
 }
 
 impl ReplicaStats {
-    pub fn record_bytes_sent(&mut self, bytes: usize) {
-        self.bytes_sent += bytes;
+    pub fn record_state_bytes_sent(&mut self, bytes: usize) {
+        self.state_bytes_sent += bytes;
     }
 
-    pub fn record_bytes_received(&mut self, bytes: usize) {
-        self.bytes_received += bytes;
+    pub fn record_state_bytes_received(&mut self, bytes: usize) {
+        self.state_bytes_received += bytes;
+    }
+
+    pub fn record_metadata_bytes_sent(&mut self, bytes: usize) {
+        self.metadata_bytes_sent += bytes;
+    }
+
+    pub fn record_metadata_bytes_received(&mut self, bytes: usize) {
+        self.metadata_bytes_received += bytes;
     }
 
     pub fn record_encode_time(&mut self, duration: Duration) {
@@ -56,7 +66,15 @@ impl ReplicaStats {
         self.elements_added += count;
     }
 }
-#[derive(Debug)]
+
+#[derive(Clone, Debug)]
+pub struct ReplicaView {
+    pub id: usize,
+    pub set_size: usize,
+    pub digests: Vec<u64>,
+}
+
+#[derive(Clone, Debug)]
 pub struct Replica {
     pub id: usize,
     pub set: HashSet<Element>,
@@ -69,44 +87,13 @@ impl Replica {
         Self {
             id,
             set,
-            phase: ReplicaPhase::default(),
+            phase: ReplicaPhase::Idle,
             stats: ReplicaStats::default(),
         }
     }
 
-    pub fn snapshot_set(&self) -> HashSet<Element> {
-        self.set.clone()
-    }
-
-    pub fn set_phase(&mut self, phase: ReplicaPhase) {
-        self.phase = phase;
-    }
-
-    pub fn replace_set(&mut self, next_set: HashSet<Element>) {
-        let added = next_set.difference(&self.set).count();
-        self.stats.record_elements_added(added);
-        self.set = next_set;
-    }
-
     pub fn len(&self) -> usize {
         self.set.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.set.is_empty()
-    }
-
-    pub fn contains(&self, element: &Element) -> bool {
-        self.set.contains(element)
-    }
-
-    pub fn insert(&mut self, element: Element) -> bool {
-        let inserted = self.set.insert(element);
-
-        if inserted {
-            self.stats.record_elements_added(1);
-        }
-        inserted
     }
 
     pub fn extend<I>(&mut self, elements: I) -> usize
@@ -114,6 +101,7 @@ impl Replica {
         I: IntoIterator<Item = Element>,
     {
         let mut added = 0;
+
         for element in elements {
             if self.set.insert(element) {
                 added += 1;
@@ -121,9 +109,29 @@ impl Replica {
         }
 
         if added > 0 {
-            self.stats.record_elements_added(added)
+            self.stats.record_elements_added(added);
         }
 
         added
+    }
+
+    pub fn snapshot_set(&self) -> HashSet<Element> {
+        self.set.clone()
+    }
+
+    pub fn snapshot_digests(&self) -> Vec<u64> {
+        self.set.iter().map(|e| e.digest).collect()
+    }
+
+    pub fn view(&self) -> ReplicaView {
+        ReplicaView {
+            id: self.id,
+            set_size: self.set.len(),
+            digests: self.snapshot_digests(),
+        }
+    }
+
+    pub fn set_phase(&mut self, phase: ReplicaPhase) {
+        self.phase = phase;
     }
 }

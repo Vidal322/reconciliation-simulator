@@ -155,18 +155,20 @@ impl Simulation {
             .collect::<Vec<ProtocolStepResult>>();
 
         for (replica, step_result) in self.replicas.iter_mut().zip(step_results) {
-            replica.stats.record_bytes_sent(
-                step_result.metrics.state_bytes + step_result.metrics.metadata_bytes,
-            );
-            replica.stats.record_bytes_received(
-                step_result.metrics.state_bytes + step_result.metrics.metadata_bytes,
-            );
+            let metrics = &step_result.metrics;
+
+            replica.stats.record_state_bytes_sent(metrics.state_bytes);
             replica
                 .stats
-                .record_encode_time(step_result.metrics.encode_time);
+                .record_state_bytes_received(metrics.state_bytes);
             replica
                 .stats
-                .record_decode_time(step_result.metrics.decode_time);
+                .record_metadata_bytes_sent(metrics.metadata_bytes);
+            replica
+                .stats
+                .record_metadata_bytes_received(metrics.metadata_bytes);
+            replica.stats.record_encode_time(metrics.encode_time);
+            replica.stats.record_decode_time(metrics.decode_time);
 
             let added = step_result.next_set.difference(&replica.set).count();
             replica.stats.record_elements_added(added);
