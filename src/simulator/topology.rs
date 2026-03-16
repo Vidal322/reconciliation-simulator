@@ -127,4 +127,49 @@ impl Topology {
             adjacency[b].push(a);
         }
     }
+
+    pub fn is_root(&self, node: usize) -> bool {
+        match self.kind {
+            TopologyKind::Tree => node == 0,
+            _ => false,
+        }
+    }
+
+    pub fn parent(&self, node: usize) -> Option<usize> {
+        match self.kind {
+            TopologyKind::Tree => {
+                if node == 0 || node >= self.num_nodes {
+                    None
+                } else {
+                    Some((node - 1) / 2)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn children(&self, node: usize) -> Vec<usize> {
+        match self.kind {
+            TopologyKind::Tree => {
+                if node >= self.num_nodes {
+                    return Vec::new();
+                }
+
+                let left = 2 * node + 1;
+                let right = 2 * node + 2;
+
+                let mut children = Vec::new();
+
+                if left < self.num_nodes {
+                    children.push(left);
+                }
+                if right < self.num_nodes {
+                    children.push(right);
+                }
+
+                children
+            }
+            _ => Vec::new(),
+        }
+    }
 }

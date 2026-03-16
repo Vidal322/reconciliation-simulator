@@ -1,5 +1,7 @@
 use crate::simulator::metrics::{MetricsCollector, MetricsSnapshot};
+use crate::simulator::protocols::bf_iblt::StaticBfIbltProtocol;
 use crate::simulator::protocols::full_state_transfer::FullStateTransfer;
+use crate::simulator::protocols::hybrid_rbf_riblt::HybridRbfRibltProtocol;
 use crate::simulator::protocols::riblt::RibltProtocol;
 use crate::simulator::protocols::{Protocol, ProtocolKind, ProtocolStepResult};
 use crate::simulator::replica::{Element, Replica, ReplicaPhase};
@@ -69,13 +71,9 @@ impl Simulation {
 
         let protocol: Box<dyn Protocol> = match config.protocol {
             ProtocolKind::FullStateTransfer => Box::new(FullStateTransfer::new()),
-            ProtocolKind::HybridRbfRiblt => {
-                panic!("Hybrid not implemented yet!")
-            }
+            ProtocolKind::HybridRbfRiblt => Box::new(HybridRbfRibltProtocol::new()),
             ProtocolKind::Riblt => Box::new(RibltProtocol::new()),
-            ProtocolKind::StaticBfIblt => {
-                panic!("StaticBfIblt not implemented yet!")
-            }
+            ProtocolKind::StaticBfIblt => Box::new(StaticBfIbltProtocol::new()),
         };
 
         Self {

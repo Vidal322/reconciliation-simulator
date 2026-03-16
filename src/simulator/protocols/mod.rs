@@ -1,5 +1,8 @@
+pub mod bf_iblt;
 pub mod full_state_transfer;
+pub mod hybrid_rbf_riblt;
 pub mod riblt;
+pub mod topology_aware_riblt;
 
 use std::collections::HashSet;
 use std::fmt;
