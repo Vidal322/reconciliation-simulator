@@ -12,6 +12,8 @@ fn main() {
         ProtocolKind::Riblt,
         ProtocolKind::StaticBfIblt,
         ProtocolKind::HybridRbfRiblt,
+        ProtocolKind::TopologyAwareRiblt,
+        ProtocolKind::TopologyAwareCbfRiblt,
     ];
 
     let topologies = [TopologyKind::Star, TopologyKind::Tree, TopologyKind::Chord];
@@ -110,6 +112,12 @@ fn main() {
                     println!(
                         "Expected: metadata bytes lower than pure RIBLT in many cases, and some state bytes."
                     );
+                }
+                ProtocolKind::TopologyAwareRiblt => {
+                    println!("Expected: converges in 1 round; metadata bytes scale with topology degree.");
+                }
+                ProtocolKind::TopologyAwareCbfRiblt => {
+                    println!("Expected: converges in 1 round; metadata bytes include CBF overhead on top of RIBLT sketch.");
                 }
             }
 

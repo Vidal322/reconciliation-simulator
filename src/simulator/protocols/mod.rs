@@ -2,6 +2,7 @@ pub mod bf_iblt;
 pub mod full_state_transfer;
 pub mod hybrid_rbf_riblt;
 pub mod riblt;
+pub mod topology_aware_cbf_riblt;
 pub mod topology_aware_riblt;
 
 use std::collections::HashSet;
@@ -17,6 +18,8 @@ pub enum ProtocolKind {
     HybridRbfRiblt,
     Riblt,
     StaticBfIblt,
+    TopologyAwareCbfRiblt,
+    TopologyAwareRiblt,
 }
 
 impl fmt::Display for ProtocolKind {
@@ -26,6 +29,8 @@ impl fmt::Display for ProtocolKind {
             ProtocolKind::HybridRbfRiblt => "HybridRbfRiblt",
             ProtocolKind::Riblt => "Riblt",
             ProtocolKind::StaticBfIblt => "StaticBfIblt",
+            ProtocolKind::TopologyAwareCbfRiblt => "TopologyAwareCbfRiblt",
+            ProtocolKind::TopologyAwareRiblt => "TopologyAwareRiblt",
         };
         write!(f, "{s}")
     }

@@ -1,4 +1,4 @@
-mod mapping;
+pub mod mapping;
 mod symbol;
 
 use std::{
@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use mapping::SymbolMapping;
+pub use mapping::SymbolMapping;
 pub use symbol::Symbol;
 use symbol::{CodedSymbol, Direction, HashedSymbol};
 

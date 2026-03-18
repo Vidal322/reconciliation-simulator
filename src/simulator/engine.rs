@@ -3,6 +3,8 @@ use crate::simulator::protocols::bf_iblt::StaticBfIbltProtocol;
 use crate::simulator::protocols::full_state_transfer::FullStateTransfer;
 use crate::simulator::protocols::hybrid_rbf_riblt::HybridRbfRibltProtocol;
 use crate::simulator::protocols::riblt::RibltProtocol;
+use crate::simulator::protocols::topology_aware_cbf_riblt::TopologyAwareCbfRibltProtocol;
+use crate::simulator::protocols::topology_aware_riblt::TopologyAwareRibltProtocol;
 use crate::simulator::protocols::{Protocol, ProtocolKind, ProtocolStepResult};
 use crate::simulator::replica::{Element, Replica, ReplicaPhase};
 use crate::simulator::topology::{Topology, TopologyKind};
@@ -74,6 +76,8 @@ impl Simulation {
             ProtocolKind::HybridRbfRiblt => Box::new(HybridRbfRibltProtocol::new()),
             ProtocolKind::Riblt => Box::new(RibltProtocol::new()),
             ProtocolKind::StaticBfIblt => Box::new(StaticBfIbltProtocol::new()),
+            ProtocolKind::TopologyAwareCbfRiblt => Box::new(TopologyAwareCbfRibltProtocol::new()),
+            ProtocolKind::TopologyAwareRiblt => Box::new(TopologyAwareRibltProtocol::new()),
         };
 
         Self {
