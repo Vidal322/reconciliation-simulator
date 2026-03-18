@@ -15,6 +15,11 @@ impl Element {
     pub fn payload_len(&self) -> usize {
         self.payload.len()
     }
+
+    /// Serialised byte size: 8-byte digest + payload bytes.
+    pub fn wire_size(&self) -> usize {
+        std::mem::size_of::<u64>() + self.payload.len()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

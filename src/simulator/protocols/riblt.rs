@@ -85,18 +85,7 @@ impl Protocol for RibltProtocol {
 mod tests {
     use super::*;
     use std::collections::HashSet;
-
-    fn make_element(digest: u64, payload_byte: u8) -> Element {
-        Element::new(digest, vec![payload_byte; 4])
-    }
-
-    fn make_replica(id: usize, digests: &[u64]) -> Replica {
-        let set = digests
-            .iter()
-            .map(|&d| make_element(d, d as u8))
-            .collect::<HashSet<_>>();
-        Replica::new(id, set)
-    }
+    use crate::simulator::protocols::test_helpers::{make_element, make_replica};
 
     #[test]
     fn riblt_step_replica_learns_missing_neighbor_elements() {

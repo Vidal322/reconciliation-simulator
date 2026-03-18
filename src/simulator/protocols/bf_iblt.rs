@@ -37,10 +37,6 @@ impl StaticBfIbltProtocol {
         }
     }
 
-    fn element_transfer_size(element: &Element) -> usize {
-        mem::size_of::<u64>() + element.payload.len()
-    }
-
     fn bloom_metadata_size(bloom: &BloomFilter<u64>) -> usize {
         bloom.byte_len() + mem::size_of::<usize>() + mem::size_of::<u64>()
     }
@@ -116,7 +112,7 @@ impl Protocol for StaticBfIbltProtocol {
                 if let Some(element) = remote_elements.iter().find(|e| e.digest == digest).cloned()
                 {
                     if next_set.insert(element.clone()) {
-                        state_bytes += Self::element_transfer_size(&element);
+                        state_bytes += element.wire_size();
                     }
                 }
             }
@@ -138,18 +134,7 @@ impl Protocol for StaticBfIbltProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_element(digest: u64, payload_byte: u8, payload_len: usize) -> Element {
-        Element::new(digest, vec![payload_byte; payload_len])
-    }
-
-    fn make_replica(id: usize, digests: &[u64]) -> Replica {
-        let set = digests
-            .iter()
-            .map(|&d| make_element(d, d as u8, 4))
-            .collect::<HashSet<_>>();
-        Replica::new(id, set)
-    }
+    use crate::simulator::protocols::test_helpers::{make_element, make_replica};
 
     #[test]
     fn bf_iblt_step_replica_learns_missing_neighbor_elements() {

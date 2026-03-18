@@ -31,7 +31,7 @@ impl Protocol for FullStateTransfer {
             // Charge for the full neighbor set — full state transfer sends every
             // element regardless of whether the receiver already has it.
             for element in &replicas[neighbor_id].set {
-                state_bytes += std::mem::size_of::<u64>() + element.payload.len();
+                state_bytes += element.wire_size();
                 next_set.insert(element.clone());
             }
         }
@@ -56,9 +56,7 @@ mod tests {
     use crate::simulator::topology::Topology;
     use std::collections::HashSet;
 
-    fn make_element(digest: u64, payload_byte: u8, payload_len: usize) -> Element {
-        Element::new(digest, vec![payload_byte; payload_len])
-    }
+    use crate::simulator::protocols::test_helpers::make_element;
 
     fn make_replica(id: usize, elements: Vec<Element>) -> Replica {
         let set = elements.into_iter().collect::<HashSet<_>>();

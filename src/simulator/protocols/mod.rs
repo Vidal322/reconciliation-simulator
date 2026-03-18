@@ -61,3 +61,21 @@ pub trait Protocol {
         topology: &Topology,
     ) -> ProtocolStepResult;
 }
+
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use crate::simulator::replica::{Element, Replica};
+    use std::collections::HashSet;
+
+    pub fn make_element(digest: u64, payload_byte: u8, payload_len: usize) -> Element {
+        Element::new(digest, vec![payload_byte; payload_len])
+    }
+
+    pub fn make_replica(id: usize, digests: &[u64]) -> Replica {
+        let set = digests
+            .iter()
+            .map(|&d| make_element(d, d as u8, 4))
+            .collect::<HashSet<_>>();
+        Replica::new(id, set)
+    }
+}
