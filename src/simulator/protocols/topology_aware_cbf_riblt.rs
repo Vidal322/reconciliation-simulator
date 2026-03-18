@@ -5,9 +5,8 @@ use crate::simulator::protocols::{Protocol, ProtocolKind, ProtocolMetrics, Proto
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
-use super::topology_aware_riblt::{
-    recover_elements, run_riblt_loop, RibltLoopResult, CELL_BYTES,
-};
+use crate::simulator::algorithms::multiparty_sketch::CELL_BYTES;
+use super::topology_aware_riblt::{recover_elements, run_riblt_loop, RibltLoopResult};
 
 // ---------------------------------------------------------------------------
 // Protocol
