@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::mem;
 use std::time::{Duration, Instant};
 
@@ -244,6 +245,105 @@ pub(super) fn build_sketch(replica: &Replica, size: usize) -> MSketch {
 }
 
 // ---------------------------------------------------------------------------
+// Shared RIBLT loop — used by both TopologyAwareRiblt and TopologyAwareCbfRiblt
+// ---------------------------------------------------------------------------
+
+pub(super) struct RibltLoopResult {
+    pub(super) final_sketch_size: usize,
+    pub(super) encode_time: Duration,
+    pub(super) decode_time: Duration,
+    pub(super) remote_only_f: Vec<u64>,
+}
+
+/// Rateless RIBLT encode-aggregate-diff-decode loop.
+///
+/// Starts at `initial_sketch_size` and grows by `cells_per_increment` on each
+/// failed decode, up to a safety cap of 200× the increment.
+///
+/// `initial_encode_time` is folded into the first encode measurement so that
+/// callers with a pre-round (e.g. CBF) can include that cost in the total.
+pub(super) fn run_riblt_loop(
+    replicas: &[Replica],
+    replica_id: usize,
+    initial_sketch_size: usize,
+    cells_per_increment: usize,
+    initial_encode_time: Duration,
+) -> RibltLoopResult {
+    let max_sketch_size = cells_per_increment * 200;
+    let mut sketch_size = initial_sketch_size;
+    let mut final_sketch_size = sketch_size;
+
+    let mut encode_time = initial_encode_time;
+    let mut decode_time = Duration::ZERO;
+    let mut remote_only_f: Vec<u64> = Vec::new();
+
+    loop {
+        let enc_start = Instant::now();
+
+        let sketches: Vec<MSketch> = replicas
+            .iter()
+            .map(|r| build_sketch(r, sketch_size))
+            .collect();
+
+        let mut total = MSketch::new(sketch_size);
+        for s in &sketches {
+            total.add_sketch(s);
+        }
+
+        encode_time += enc_start.elapsed();
+
+        let dec_start = Instant::now();
+
+        let mut diff = MSketch::new(sketch_size);
+        diff.add_sketch(&total);
+        diff.sub_sketch(&sketches[replica_id]);
+
+        match diff.try_decode() {
+            Some(digests) => {
+                decode_time += dec_start.elapsed();
+                final_sketch_size = sketch_size;
+                remote_only_f = digests;
+                break;
+            }
+            None => {
+                decode_time += dec_start.elapsed();
+                sketch_size += cells_per_increment;
+                if sketch_size > max_sketch_size {
+                    final_sketch_size = sketch_size - cells_per_increment;
+                    break;
+                }
+            }
+        }
+    }
+
+    RibltLoopResult {
+        final_sketch_size,
+        encode_time,
+        decode_time,
+        remote_only_f,
+    }
+}
+
+/// Insert into `next_set` every element whose field-reduced digest appears in
+/// `remote_only_f`.  Elements are looked up across all replicas.
+pub(super) fn recover_elements(
+    remote_only_f: &[u64],
+    replicas: &[Replica],
+    next_set: &mut HashSet<Element>,
+) {
+    for d_f in remote_only_f {
+        if let Some(element) = replicas
+            .iter()
+            .flat_map(|r| r.set.iter())
+            .find(|e| e.digest % P == *d_f)
+            .cloned()
+        {
+            next_set.insert(element);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Protocol
 // ---------------------------------------------------------------------------
 
@@ -312,74 +412,22 @@ impl Protocol for TopologyAwareRibltProtocol {
     ) -> ProtocolStepResult {
         let mut next_set = replicas[replica_id].snapshot_set();
 
-        let max_sketch_size = self.cells_per_increment * 200;
-        let mut sketch_size = self.cells_per_increment;
-        let mut final_sketch_size = sketch_size;
+        let RibltLoopResult {
+            final_sketch_size,
+            encode_time,
+            decode_time,
+            remote_only_f,
+        } = run_riblt_loop(
+            replicas,
+            replica_id,
+            self.cells_per_increment,
+            self.cells_per_increment,
+            Duration::ZERO,
+        );
 
-        let mut encode_time = Duration::ZERO;
-        let mut decode_time = Duration::ZERO;
-        let mut remote_only_f: Vec<u64> = Vec::new();
-
-        loop {
-            let enc_start = Instant::now();
-
-            // Each replica encodes its own set into a sketch of the current size.
-            let sketches: Vec<MSketch> = replicas
-                .iter()
-                .map(|r| build_sketch(r, sketch_size))
-                .collect();
-
-            // Aggregate: total = ∑ IBLT(Sⱼ).
-            let mut total = MSketch::new(sketch_size);
-            for s in &sketches {
-                total.add_sketch(s);
-            }
-
-            encode_time = enc_start.elapsed();
-
-            let dec_start = Instant::now();
-
-            // Diff: total − IBLT(Sᵢ) encodes elements other replicas have
-            // that replica_id is missing (positive count) plus elements only
-            // replica_id has (negative count, not needed here).
-            let mut diff = MSketch::new(sketch_size);
-            diff.add_sketch(&total);
-            diff.sub_sketch(&sketches[replica_id]);
-
-            match diff.try_decode() {
-                Some(digests) => {
-                    decode_time = dec_start.elapsed();
-                    final_sketch_size = sketch_size;
-                    remote_only_f = digests;
-                    break;
-                }
-                None => {
-                    decode_time += dec_start.elapsed();
-                    sketch_size += self.cells_per_increment;
-                    if sketch_size > max_sketch_size {
-                        // Safety cap: return the best-effort result.
-                        final_sketch_size = sketch_size - self.cells_per_increment;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Recover full Element values.  recovered digests are (digest % P);
-        // for the overwhelming majority of u64 values digest % P == digest.
-        let mut state_bytes = 0usize;
-        for d_f in &remote_only_f {
-            if let Some(element) = replicas
-                .iter()
-                .flat_map(|r| r.set.iter())
-                .find(|e| e.digest % P == *d_f)
-                .cloned()
-            {
-                if next_set.insert(element.clone()) {
-                    state_bytes += mem::size_of::<u64>() + element.payload.len();
-                }
-            }
-        }
+        // state_bytes = 0: elements are encoded inside the sketch (metadata),
+        // not transmitted as separate state, consistent with pairwise Riblt.
+        recover_elements(&remote_only_f, replicas, &mut next_set);
 
         // Bytes model: each node exchanges one sketch per adjacent edge in both
         // directions (upload toward aggregator + download of total sketch).
@@ -392,7 +440,7 @@ impl Protocol for TopologyAwareRibltProtocol {
         ProtocolStepResult {
             next_set,
             metrics: ProtocolMetrics {
-                state_bytes,
+                state_bytes: 0,
                 metadata_bytes,
                 encode_time,
                 decode_time,

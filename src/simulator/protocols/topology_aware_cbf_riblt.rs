@@ -1,4 +1,3 @@
-use std::mem;
 use std::time::{Duration, Instant};
 
 use crate::simulator::algorithms::counting_bloom::CountingBf;
@@ -6,7 +5,9 @@ use crate::simulator::protocols::{Protocol, ProtocolKind, ProtocolMetrics, Proto
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
-use super::topology_aware_riblt::{build_sketch, MSketch, CELL_BYTES, P};
+use super::topology_aware_riblt::{
+    recover_elements, run_riblt_loop, RibltLoopResult, CELL_BYTES,
+};
 
 // ---------------------------------------------------------------------------
 // Protocol
@@ -109,69 +110,24 @@ impl Protocol for TopologyAwareCbfRibltProtocol {
             .max(self.cells_per_increment);
 
         // ------------------------------------------------------------------
-        // RIBLT phase (identical to TopologyAwareRiblt, different start size)
+        // RIBLT phase — CBF encode time folded in via initial_encode_time
         // ------------------------------------------------------------------
-        let max_sketch_size = self.cells_per_increment * 200;
-        let mut sketch_size = initial_sketch_size;
-        let mut final_sketch_size = sketch_size;
+        let RibltLoopResult {
+            final_sketch_size,
+            encode_time,
+            decode_time,
+            remote_only_f,
+        } = run_riblt_loop(
+            replicas,
+            replica_id,
+            initial_sketch_size,
+            self.cells_per_increment,
+            encode_time_cbf,
+        );
 
-        let mut encode_time = encode_time_cbf;
-        let mut decode_time = Duration::ZERO;
-        let mut remote_only_f: Vec<u64> = Vec::new();
-
-        loop {
-            let enc_start = Instant::now();
-
-            let sketches: Vec<MSketch> = replicas
-                .iter()
-                .map(|r| build_sketch(r, sketch_size))
-                .collect();
-
-            let mut total = MSketch::new(sketch_size);
-            for s in &sketches {
-                total.add_sketch(s);
-            }
-
-            encode_time += enc_start.elapsed();
-
-            let dec_start = Instant::now();
-
-            let mut diff = MSketch::new(sketch_size);
-            diff.add_sketch(&total);
-            diff.sub_sketch(&sketches[replica_id]);
-
-            match diff.try_decode() {
-                Some(digests) => {
-                    decode_time = dec_start.elapsed();
-                    final_sketch_size = sketch_size;
-                    remote_only_f = digests;
-                    break;
-                }
-                None => {
-                    decode_time += dec_start.elapsed();
-                    sketch_size += self.cells_per_increment;
-                    if sketch_size > max_sketch_size {
-                        final_sketch_size = sketch_size - self.cells_per_increment;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Recover full Element values.
-        let mut state_bytes = 0usize;
-        for d_f in &remote_only_f {
-            if let Some(element) = replicas
-                .iter()
-                .flat_map(|r| r.set.iter())
-                .find(|e| e.digest % P == *d_f)
-                .cloned()
-            {
-                if next_set.insert(element.clone()) {
-                    state_bytes += mem::size_of::<u64>() + element.payload.len();
-                }
-            }
-        }
+        // state_bytes = 0: elements are encoded inside the sketch (metadata),
+        // not transmitted as separate state.
+        recover_elements(&remote_only_f, replicas, &mut next_set);
 
         // Byte accounting: RIBLT sketch bytes + CBF bytes per neighbor edge.
         let num_neighbors = topology.neighbors(replica_id).len();
@@ -181,7 +137,7 @@ impl Protocol for TopologyAwareCbfRibltProtocol {
         ProtocolStepResult {
             next_set,
             metrics: ProtocolMetrics {
-                state_bytes,
+                state_bytes: 0,
                 metadata_bytes,
                 encode_time,
                 decode_time,

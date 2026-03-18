@@ -28,11 +28,11 @@ impl Protocol for FullStateTransfer {
         let mut state_bytes = 0usize;
 
         for &neighbor_id in topology.neighbors(replica_id) {
+            // Charge for the full neighbor set — full state transfer sends every
+            // element regardless of whether the receiver already has it.
             for element in &replicas[neighbor_id].set {
-                if !next_set.contains(element) {
-                    state_bytes += std::mem::size_of::<u64>() + element.payload.len();
-                    next_set.insert(element.clone());
-                }
+                state_bytes += std::mem::size_of::<u64>() + element.payload.len();
+                next_set.insert(element.clone());
             }
         }
 
@@ -122,7 +122,10 @@ mod tests {
 
         let result = protocol.step_replica(0, &replicas, &topology);
 
-        let expected = (std::mem::size_of::<u64>() + 10) + (std::mem::size_of::<u64>() + 6);
+        // All 3 elements in neighbor's set are transmitted, not just the 2 new ones.
+        let expected = (std::mem::size_of::<u64>() + 4)
+            + (std::mem::size_of::<u64>() + 10)
+            + (std::mem::size_of::<u64>() + 6);
 
         assert_eq!(result.metrics.state_bytes, expected);
         assert_eq!(result.metrics.metadata_bytes, 0);
