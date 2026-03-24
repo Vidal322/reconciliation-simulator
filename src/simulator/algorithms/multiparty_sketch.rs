@@ -10,7 +10,7 @@ use crate::simulator::replica::Replica;
 //
 // P is the largest 64-bit prime.  Using a prime field instead of XOR means
 // that k copies of the same element contribute k·e to the symbol accumulator
-// rather than e⊕e⊕…, which cancels to 0 for even k.  With field arithmetic
+// rather than eXOReXOR…, which cancels to 0 for even k.  With field arithmetic
 // we can always recover e = sym / k via modular inversion.
 // ---------------------------------------------------------------------------
 pub const P: u64 = 18_446_744_073_709_551_557;
@@ -18,20 +18,12 @@ pub const P: u64 = 18_446_744_073_709_551_557;
 #[inline]
 pub fn fadd(a: u64, b: u64) -> u64 {
     let (s, ov) = a.overflowing_add(b);
-    if ov || s >= P {
-        s.wrapping_sub(P)
-    } else {
-        s
-    }
+    if ov || s >= P { s.wrapping_sub(P) } else { s }
 }
 
 #[inline]
 pub fn fsub(a: u64, b: u64) -> u64 {
-    if a >= b {
-        a - b
-    } else {
-        P - (b - a)
-    }
+    if a >= b { a - b } else { P - (b - a) }
 }
 
 #[inline]

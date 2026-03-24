@@ -2,8 +2,6 @@ pub mod bf_iblt;
 pub mod full_state_transfer;
 pub mod hybrid_rbf_riblt;
 pub mod riblt;
-pub mod topology_aware_cbf_riblt;
-pub mod topology_aware_riblt;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -12,14 +10,16 @@ use std::time::Duration;
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
+pub enum NetworkMsg {
+    Snapshot { elements: Vec<Element> },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProtocolKind {
     FullStateTransfer,
     HybridRbfRiblt,
     Riblt,
     StaticBfIblt,
-    TopologyAwareCbfRiblt,
-    TopologyAwareRiblt,
 }
 
 impl fmt::Display for ProtocolKind {
@@ -29,8 +29,6 @@ impl fmt::Display for ProtocolKind {
             ProtocolKind::HybridRbfRiblt => "HybridRbfRiblt",
             ProtocolKind::Riblt => "Riblt",
             ProtocolKind::StaticBfIblt => "StaticBfIblt",
-            ProtocolKind::TopologyAwareCbfRiblt => "TopologyAwareCbfRiblt",
-            ProtocolKind::TopologyAwareRiblt => "TopologyAwareRiblt",
         };
         write!(f, "{s}")
     }
