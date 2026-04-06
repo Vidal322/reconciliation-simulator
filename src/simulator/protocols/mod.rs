@@ -8,6 +8,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::time::Duration;
 
+use crate::simulator::network::Network;
+use crate::simulator::protocols::messages::ProtocolMsg;
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
@@ -56,6 +58,42 @@ pub trait Protocol {
         topology: &Topology,
     ) -> ProtocolStepResult;
 }
+// -----------------Protocol 2 to replace protocol------------------------
+
+pub trait Protocol2 {
+    fn kind(&self) -> ProtocolKind;
+
+    fn send_phase(
+        &mut self,
+        replica_id: usize,
+        local: &Replica,
+        topology: &Topology,
+        network: &mut Network<ProtocolMsg>,
+    );
+
+    fn recv_phase(
+        &mut self,
+        replica_id: usize,
+        local: &Replica,
+        topology: &Topology,
+        inbox: Vec<(usize, ProtocolMsg)>,
+    ) -> Protocol2StepResult;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Protocol2StepResult {
+    pub next_set: HashSet<Element>,
+    pub metrics: LocalMetrics,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct LocalMetrics {
+    pub encode_time: Duration,
+    pub decode_time: Duration,
+    pub false_matches: usize,
+}
+
+// -----------------------------------------
 
 #[cfg(test)]
 pub(crate) mod test_helpers {
