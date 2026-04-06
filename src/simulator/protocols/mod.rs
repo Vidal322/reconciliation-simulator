@@ -1,6 +1,7 @@
 pub mod bf_iblt;
 pub mod full_state_transfer;
 pub mod hybrid_rbf_riblt;
+pub mod messages;
 pub mod riblt;
 
 use std::collections::HashSet;
@@ -9,10 +10,6 @@ use std::time::Duration;
 
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
-
-pub enum NetworkMsg {
-    Snapshot { elements: Vec<Element> },
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProtocolKind {
