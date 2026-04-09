@@ -77,6 +77,7 @@ pub trait Protocol2 {
         local: &Replica,
         topology: &Topology,
         inbox: Vec<(usize, ProtocolMsg)>,
+        network: &mut Network<ProtocolMsg>,
     ) -> Protocol2StepResult;
 }
 

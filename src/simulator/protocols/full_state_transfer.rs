@@ -75,10 +75,11 @@ impl Protocol2 for FullStateTransfer {
 
     fn recv_phase(
         &mut self,
-        replica_id: usize,
+        _replica_id: usize,
         local: &Replica,
-        topology: &Topology,
+        _topology: &Topology,
         inbox: Vec<(usize, super::messages::ProtocolMsg)>,
+        _network: &mut crate::simulator::network::Network<super::messages::ProtocolMsg>,
     ) -> Protocol2StepResult {
         let mut next_set = local.snapshot_set();
         for (_from, msg) in inbox {
@@ -276,7 +277,7 @@ mod tests {
 
         // Replica 0 drains its inbox and reconciles.
         let inbox_0 = network.drain_inbox(0);
-        let result_0 = protocol.recv_phase(0, &replicas[0], &topology, inbox_0);
+        let result_0 = protocol.recv_phase(0, &replicas[0], &topology, inbox_0, &mut network);
 
         let digests = result_0
             .next_set

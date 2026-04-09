@@ -10,7 +10,7 @@ use crate::simulator::replica::{Element, Replica, ReplicaPhase};
 use crate::simulator::topology::{Topology, TopologyKind};
 use crate::simulator::workload::{Workload, WorkloadConfig};
 
-use crate::simulator::network::{Network, NetworkStats};
+use crate::simulator::network::Network;
 use crate::simulator::protocols::messages::ProtocolMsg;
 use crate::simulator::protocols::{LocalMetrics, Protocol2};
 
@@ -47,7 +47,6 @@ pub struct Simulation {
     replicas: Vec<Replica>,
     topology: Box<Topology>,
     driver: ProtocolDriver,
-    protocol: Box<dyn Protocol>,
     metrics: MetricsCollector,
     target_union: HashSet<Element>,
     current_round: usize,
@@ -93,13 +92,6 @@ impl Simulation {
             config.workload.num_replicas,
         ));
 
-        let protocol: Box<dyn Protocol> = match config.protocol {
-            ProtocolKind::FullStateTransfer => Box::new(FullStateTransfer::new()),
-            ProtocolKind::HybridRbfRiblt => Box::new(HybridRbfRibltProtocol::new()),
-            ProtocolKind::Riblt => Box::new(RibltProtocol::new()),
-            ProtocolKind::StaticBfIblt => Box::new(StaticBfIbltProtocol::new()),
-        };
-
         let driver = match config.protocol {
             ProtocolKind::FullStateTransfer => {
                 let network = Network::from_topology(&topology);
@@ -108,10 +100,16 @@ impl Simulation {
                     network,
                 }
             }
+            ProtocolKind::Riblt => {
+                let network = Network::from_topology(&topology);
+                ProtocolDriver::NetworkMediated {
+                    protocol: Box::new(RibltProtocol::new()),
+                    network,
+                }
+            }
             ProtocolKind::HybridRbfRiblt => {
                 ProtocolDriver::Legacy(Box::new(HybridRbfRibltProtocol::new()))
             }
-            ProtocolKind::Riblt => ProtocolDriver::Legacy(Box::new(RibltProtocol::new())),
             ProtocolKind::StaticBfIblt => {
                 ProtocolDriver::Legacy(Box::new(StaticBfIbltProtocol::new()))
             }
@@ -121,7 +119,6 @@ impl Simulation {
             config,
             replicas,
             topology,
-            protocol,
             driver,
             metrics: MetricsCollector::new(),
             target_union: workload.target_union,
@@ -191,8 +188,7 @@ impl Simulation {
             ProtocolDriver::Legacy(protocol) => {
                 let step_results = (0..self.replicas.len())
                     .map(|replica_id| {
-                        self.protocol
-                            .step_replica(replica_id, &self.replicas, &self.topology)
+                        protocol.step_replica(replica_id, &self.replicas, &self.topology)
                     })
                     .collect::<Vec<ProtocolStepResult>>();
 
@@ -229,8 +225,6 @@ impl Simulation {
                         network,
                     );
                 }
-                // Snapshot the post-send byte stats. recv_phase doesn't add bytes
-                let stats = network.stats();
 
                 let recv_results: Vec<(HashSet<Element>, LocalMetrics)> = (0..self.replicas.len())
                     .map(|replica_id| {
@@ -240,25 +234,33 @@ impl Simulation {
                             &self.replicas[replica_id],
                             &self.topology,
                             inbox,
+                            network,
                         );
                         (result.next_set, result.metrics)
                     })
                     .collect();
+
+                // Snapshot AFTER recv_phase so decoded metadata
+                // (e.g. RIBLT sketch lengths billed via
+                // record_decoded_metadata) is included.
+                let stats = network.stats();
+
                 for (replica_id, (replica, (next_set, local_metrics))) in
                     self.replicas.iter_mut().zip(recv_results).enumerate()
                 {
-                    replica
-                        .stats
-                        .record_state_bytes_sent(stats.per_node_state[replica_id] as usize);
-                    replica
-                        .stats
-                        .record_metadata_bytes_sent(stats.per_node_metadata[replica_id] as usize);
+                    let sent_state = stats.per_node_state[replica_id] as usize;
+                    let sent_meta = stats.per_node_metadata[replica_id] as usize;
+                    replica.stats.record_state_bytes_sent(sent_state);
+                    replica.stats.record_metadata_bytes_sent(sent_meta);
+
+                    replica.stats.record_state_bytes_received(sent_state);
+                    replica.stats.record_metadata_bytes_received(sent_meta);
                     replica.stats.record_encode_time(local_metrics.encode_time);
                     replica.stats.record_decode_time(local_metrics.decode_time);
 
                     let added = next_set.difference(&replica.set).count();
                     replica.stats.record_elements_added(added);
-                    replica.set = next_set
+                    replica.set = next_set;
                 }
             }
         }
@@ -305,7 +307,7 @@ impl Simulation {
     }
 
     pub fn protocol(&self) -> ProtocolKind {
-        self.protocol.kind()
+        self.driver.kind()
     }
 
     pub fn current_round(&self) -> usize {

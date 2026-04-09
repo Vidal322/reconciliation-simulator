@@ -9,6 +9,7 @@ pub enum ProtocolMsg {
     RibltSketch {
         symbols: usize,
         digests: Vec<u64>,
+        elements: Vec<Element>,
     },
 
     BloomFilter {
@@ -79,6 +80,7 @@ mod tests {
         let msg = ProtocolMsg::RibltSketch {
             symbols: 12,
             digests: vec![],
+            elements: vec![],
         };
         assert_eq!(msg.state_bytes(), 0);
         assert_eq!(msg.metadata_bytes(), 12 * mem::size_of::<u64>() as u64);

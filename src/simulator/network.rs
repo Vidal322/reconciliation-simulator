@@ -71,6 +71,20 @@ impl<Msg: WireSized> Network<Msg> {
         self.inboxes[node].drain(..).collect()
     }
 
+    /// Record metadata bytes attributed to a node that learned them
+    /// by decoding (rather than emitting). Used by interactive
+    /// protocols where the wire cost depends on the receiver's local
+    /// state — e.g. RIBLT, where the symbol count is determined
+    /// during the joint decode and is not knowable at send time.
+    ///
+    /// This is the only way to bill bytes outside `send()`. The method
+    /// lives on `Network` so the harness retains exclusive control of
+    /// the byte counters; protocols cannot bypass it.
+    pub fn record_decoded_metadata(&mut self, node: usize, bytes: u64) {
+        self.bytes_metadata += bytes;
+        self.per_node_metadata[node] += bytes;
+    }
+
     pub fn stats(&self) -> NetworkStats {
         NetworkStats {
             bytes_state: self.bytes_state,
