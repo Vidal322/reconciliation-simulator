@@ -10,7 +10,28 @@ use crate::simulator::replica::{Element, Replica, ReplicaPhase};
 use crate::simulator::topology::{Topology, TopologyKind};
 use crate::simulator::workload::{Workload, WorkloadConfig};
 
+use crate::simulator::network::{Network, NetworkStats};
+use crate::simulator::protocols::messages::ProtocolMsg;
+use crate::simulator::protocols::{LocalMetrics, Protocol2};
+
 use std::collections::HashSet;
+
+enum ProtocolDriver {
+    Legacy(Box<dyn Protocol>),
+    NetworkMediated {
+        protocol: Box<dyn Protocol2>,
+        network: Network<ProtocolMsg>,
+    },
+}
+
+impl ProtocolDriver {
+    fn kind(&self) -> ProtocolKind {
+        match self {
+            ProtocolDriver::Legacy(p) => p.kind(),
+            ProtocolDriver::NetworkMediated { protocol, .. } => protocol.kind(),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct SimulationConfig {
@@ -25,6 +46,7 @@ pub struct Simulation {
     config: SimulationConfig,
     replicas: Vec<Replica>,
     topology: Box<Topology>,
+    driver: ProtocolDriver,
     protocol: Box<dyn Protocol>,
     metrics: MetricsCollector,
     target_union: HashSet<Element>,
@@ -78,11 +100,29 @@ impl Simulation {
             ProtocolKind::StaticBfIblt => Box::new(StaticBfIbltProtocol::new()),
         };
 
+        let driver = match config.protocol {
+            ProtocolKind::FullStateTransfer => {
+                let network = Network::from_topology(&topology);
+                ProtocolDriver::NetworkMediated {
+                    protocol: Box::new(FullStateTransfer::new()),
+                    network,
+                }
+            }
+            ProtocolKind::HybridRbfRiblt => {
+                ProtocolDriver::Legacy(Box::new(HybridRbfRibltProtocol::new()))
+            }
+            ProtocolKind::Riblt => ProtocolDriver::Legacy(Box::new(RibltProtocol::new())),
+            ProtocolKind::StaticBfIblt => {
+                ProtocolDriver::Legacy(Box::new(StaticBfIbltProtocol::new()))
+            }
+        };
+
         Self {
             config,
             replicas,
             topology,
             protocol,
+            driver,
             metrics: MetricsCollector::new(),
             target_union: workload.target_union,
             current_round: 0,
@@ -147,33 +187,80 @@ impl Simulation {
         self.current_round += 1;
         self.mark_active();
 
-        let step_results = (0..self.replicas.len())
-            .map(|replica_id| {
-                self.protocol
-                    .step_replica(replica_id, &self.replicas, &self.topology)
-            })
-            .collect::<Vec<ProtocolStepResult>>();
+        match &mut self.driver {
+            ProtocolDriver::Legacy(protocol) => {
+                let step_results = (0..self.replicas.len())
+                    .map(|replica_id| {
+                        self.protocol
+                            .step_replica(replica_id, &self.replicas, &self.topology)
+                    })
+                    .collect::<Vec<ProtocolStepResult>>();
 
-        for (replica, step_result) in self.replicas.iter_mut().zip(step_results) {
-            let metrics = &step_result.metrics;
+                for (replica, step_result) in self.replicas.iter_mut().zip(step_results) {
+                    let metrics = &step_result.metrics;
 
-            replica.stats.record_state_bytes_sent(metrics.state_bytes);
-            replica
-                .stats
-                .record_state_bytes_received(metrics.state_bytes);
-            replica
-                .stats
-                .record_metadata_bytes_sent(metrics.metadata_bytes);
-            replica
-                .stats
-                .record_metadata_bytes_received(metrics.metadata_bytes);
-            replica.stats.record_encode_time(metrics.encode_time);
-            replica.stats.record_decode_time(metrics.decode_time);
+                    replica.stats.record_state_bytes_sent(metrics.state_bytes);
+                    replica
+                        .stats
+                        .record_state_bytes_received(metrics.state_bytes);
+                    replica
+                        .stats
+                        .record_metadata_bytes_sent(metrics.metadata_bytes);
+                    replica
+                        .stats
+                        .record_metadata_bytes_received(metrics.metadata_bytes);
+                    replica.stats.record_encode_time(metrics.encode_time);
+                    replica.stats.record_decode_time(metrics.decode_time);
 
-            let added = step_result.next_set.difference(&replica.set).count();
-            replica.stats.record_elements_added(added);
+                    let added = step_result.next_set.difference(&replica.set).count();
+                    replica.stats.record_elements_added(added);
 
-            replica.set = step_result.next_set;
+                    replica.set = step_result.next_set;
+                }
+            }
+            ProtocolDriver::NetworkMediated { protocol, network } => {
+                network.reset();
+
+                for replica_id in 0..self.replicas.len() {
+                    protocol.send_phase(
+                        replica_id,
+                        &self.replicas[replica_id],
+                        &self.topology,
+                        network,
+                    );
+                }
+                // Snapshot the post-send byte stats. recv_phase doesn't add bytes
+                let stats = network.stats();
+
+                let recv_results: Vec<(HashSet<Element>, LocalMetrics)> = (0..self.replicas.len())
+                    .map(|replica_id| {
+                        let inbox = network.drain_inbox(replica_id);
+                        let result = protocol.recv_phase(
+                            replica_id,
+                            &self.replicas[replica_id],
+                            &self.topology,
+                            inbox,
+                        );
+                        (result.next_set, result.metrics)
+                    })
+                    .collect();
+                for (replica_id, (replica, (next_set, local_metrics))) in
+                    self.replicas.iter_mut().zip(recv_results).enumerate()
+                {
+                    replica
+                        .stats
+                        .record_state_bytes_sent(stats.per_node_state[replica_id] as usize);
+                    replica
+                        .stats
+                        .record_metadata_bytes_sent(stats.per_node_metadata[replica_id] as usize);
+                    replica.stats.record_encode_time(local_metrics.encode_time);
+                    replica.stats.record_decode_time(local_metrics.decode_time);
+
+                    let added = next_set.difference(&replica.set).count();
+                    replica.stats.record_elements_added(added);
+                    replica.set = next_set
+                }
+            }
         }
 
         if self.has_converged() {
