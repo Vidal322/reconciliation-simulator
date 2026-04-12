@@ -1,5 +1,6 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
+use crate::simulator::protocols::messages::SimulatorHint;
 use crate::simulator::topology::Topology;
 /// Wire-size contract for anything sent through `Network`.
 /// Split into `state_bytes` (payload: actual set elements being transferred)
@@ -106,6 +107,65 @@ impl<Msg: WireSized> Network<Msg> {
     }
 }
 
+pub struct HintStore {
+    pending: HashMap<(usize, usize), VecDeque<SimulatorHint>>,
+}
+
+impl HintStore {
+    pub fn new() -> Self {
+        Self {
+            pending: HashMap::new(),
+        }
+    }
+
+    pub fn store(&mut self, from: usize, to: usize, hint: SimulatorHint) {
+        self.pending.entry((from, to)).or_default().push_back(hint);
+    }
+
+    pub fn drain_for(&mut self, from: usize, to: usize) -> SimulatorHint {
+        self.pending
+            .get_mut(&(from, to))
+            .and_then(|q| q.pop_front())
+            .unwrap_or(SimulatorHint::None)
+    }
+
+    pub fn reset(&mut self) {
+        self.pending.clear();
+    }
+}
+
+/// Restricted view passed to send_phase: can only send messages.
+pub struct SendView<'a, Msg: WireSized> {
+    network: &'a mut Network<Msg>,
+    hints: &'a mut HintStore,
+}
+
+impl<'a, Msg: WireSized> SendView<'a, Msg> {
+    pub fn new(network: &'a mut Network<Msg>, hints: &'a mut HintStore) -> Self {
+        Self { network, hints }
+    }
+
+    pub fn send(&mut self, from: usize, to: usize, msg: Msg, hint: SimulatorHint) {
+        self.network.send(from, to, msg);
+        self.hints.store(from, to, hint);
+    }
+}
+
+/// Restricted view passed to recv_phase: can only record decoded metadata.
+pub struct RecvView<'a, Msg: WireSized> {
+    network: &'a mut Network<Msg>,
+}
+
+impl<'a, Msg: WireSized> RecvView<'a, Msg> {
+    pub fn new(network: &'a mut Network<Msg>) -> Self {
+        Self { network }
+    }
+
+    pub fn record_decoded_metadata(&mut self, node: usize, bytes: u64) {
+        self.network.record_decoded_metadata(node, bytes);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +223,22 @@ mod tests {
         let topo = Topology::tree(3);
         let mut net: Network<Dummy> = Network::from_topology(&topo);
         net.send(1, 2, Dummy { s: 1, m: 1 });
+    }
+
+    #[test]
+    fn hint_store_drains_in_fifo_order() {
+        let mut store = HintStore::new();
+        store.store(0, 1, SimulatorHint::RibltDigests { digests: vec![10] });
+        store.store(0, 1, SimulatorHint::RibltDigests { digests: vec![20] });
+
+        match store.drain_for(0, 1) {
+            SimulatorHint::RibltDigests { digests } => assert_eq!(digests, vec![10]),
+            _ => panic!("expected RibltDigests"),
+        }
+        match store.drain_for(0, 1) {
+            SimulatorHint::RibltDigests { digests } => assert_eq!(digests, vec![20]),
+            _ => panic!("expected RibltDigests"),
+        }
+        assert!(matches!(store.drain_for(0, 1), SimulatorHint::None));
     }
 }
