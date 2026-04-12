@@ -61,6 +61,25 @@ impl WireSized for ProtocolMsg {
     }
 }
 
+/// Auxiliary reconstruction data that travels outside the Network.
+/// Never billed — exists only so the receiver can rebuild the
+/// sender's data structure without real serialization.
+///
+pub enum SimulatorHint {
+    None,
+    RibltDigests {
+        digests: Vec<u64>,
+    },
+    BloomDigests {
+        digests: Vec<u64>,
+        false_positive_rate: f64,
+    },
+    RatelessBloomDigests {
+        digests: Vec<u64>,
+        bloom_bits: usize,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
