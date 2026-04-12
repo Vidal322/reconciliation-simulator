@@ -111,7 +111,11 @@ impl Simulation {
                 ProtocolDriver::Legacy(Box::new(HybridRbfRibltProtocol::new()))
             }
             ProtocolKind::StaticBfIblt => {
-                ProtocolDriver::Legacy(Box::new(StaticBfIbltProtocol::new()))
+                let network = Network::from_topology(&topology);
+                ProtocolDriver::NetworkMediated {
+                    protocol: Box::new(StaticBfIbltProtocol::new()),
+                    network,
+                }
             }
         };
 
