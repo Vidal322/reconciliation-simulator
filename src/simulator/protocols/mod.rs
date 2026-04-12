@@ -33,33 +33,6 @@ impl fmt::Display for ProtocolKind {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct ProtocolMetrics {
-    pub state_bytes: usize,
-    pub metadata_bytes: usize,
-    pub encode_time: Duration,
-    pub decode_time: Duration,
-    pub false_matches: usize,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ProtocolStepResult {
-    pub next_set: HashSet<Element>,
-    pub metrics: ProtocolMetrics,
-}
-
-pub trait Protocol {
-    fn kind(&self) -> ProtocolKind;
-
-    fn step_replica(
-        &self,
-        replica_id: usize,
-        replicas: &[Replica],
-        topology: &Topology,
-    ) -> ProtocolStepResult;
-}
-// -----------------Protocol 2 to replace protocol------------------------
-
 pub trait Protocol2 {
     fn kind(&self) -> ProtocolKind;
 
@@ -93,8 +66,6 @@ pub struct LocalMetrics {
     pub decode_time: Duration,
     pub false_matches: usize,
 }
-
-// -----------------------------------------
 
 #[cfg(test)]
 pub(crate) mod test_helpers {
