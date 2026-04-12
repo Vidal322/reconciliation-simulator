@@ -9,7 +9,7 @@ use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::Network;
 use crate::simulator::protocols::messages::ProtocolMsg;
 use crate::simulator::protocols::{
-    LocalMetrics, Protocol2, Protocol2StepResult, ProtocolKind,
+    LocalMetrics, Protocol, ProtocolStepResult, ProtocolKind,
 };
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
@@ -71,7 +71,7 @@ impl HybridRbfRibltProtocol {
     }
 }
 
-impl Protocol2 for HybridRbfRibltProtocol {
+impl Protocol for HybridRbfRibltProtocol {
     fn kind(&self) -> ProtocolKind {
         ProtocolKind::HybridRbfRiblt
     }
@@ -132,7 +132,7 @@ impl Protocol2 for HybridRbfRibltProtocol {
         _topology: &Topology,
         inbox: Vec<(usize, ProtocolMsg)>,
         network: &mut Network<ProtocolMsg>,
-    ) -> Protocol2StepResult {
+    ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
 
         let mut encode_time = Duration::ZERO;
@@ -237,7 +237,7 @@ impl Protocol2 for HybridRbfRibltProtocol {
             }
         }
 
-        Protocol2StepResult {
+        ProtocolStepResult {
             next_set,
             metrics: LocalMetrics {
                 encode_time,

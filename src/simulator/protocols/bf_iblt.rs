@@ -7,7 +7,7 @@ use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::Network;
 use crate::simulator::protocols::messages::ProtocolMsg;
 use crate::simulator::protocols::{
-    LocalMetrics, Protocol2, Protocol2StepResult, ProtocolKind,
+    LocalMetrics, Protocol, ProtocolStepResult, ProtocolKind,
 };
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
@@ -63,7 +63,7 @@ impl StaticBfIbltProtocol {
     }
 }
 
-impl Protocol2 for StaticBfIbltProtocol {
+impl Protocol for StaticBfIbltProtocol {
     fn kind(&self) -> ProtocolKind {
         ProtocolKind::StaticBfIblt
     }
@@ -123,7 +123,7 @@ impl Protocol2 for StaticBfIbltProtocol {
         _topology: &Topology,
         inbox: Vec<(usize, ProtocolMsg)>,
         network: &mut Network<ProtocolMsg>,
-    ) -> Protocol2StepResult {
+    ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
 
         let mut encode_time = Duration::ZERO;
@@ -235,7 +235,7 @@ impl Protocol2 for StaticBfIbltProtocol {
             }
         }
 
-        Protocol2StepResult {
+        ProtocolStepResult {
             next_set,
             metrics: LocalMetrics {
                 encode_time,

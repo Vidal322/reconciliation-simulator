@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::Network;
 use crate::simulator::protocols::messages::ProtocolMsg;
-use crate::simulator::protocols::{LocalMetrics, Protocol2, Protocol2StepResult, ProtocolKind};
+use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolStepResult, ProtocolKind};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
@@ -41,7 +41,7 @@ impl RibltProtocol {
     }
 }
 
-impl Protocol2 for RibltProtocol {
+impl Protocol for RibltProtocol {
     fn kind(&self) -> ProtocolKind {
         ProtocolKind::Riblt
     }
@@ -88,7 +88,7 @@ impl Protocol2 for RibltProtocol {
         _topology: &Topology,
         inbox: Vec<(usize, ProtocolMsg)>,
         network: &mut Network<ProtocolMsg>,
-    ) -> Protocol2StepResult {
+    ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
         let local_digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
 
@@ -138,7 +138,7 @@ impl Protocol2 for RibltProtocol {
             }
         }
 
-        Protocol2StepResult {
+        ProtocolStepResult {
             next_set,
             metrics: LocalMetrics {
                 encode_time,

@@ -33,7 +33,7 @@ impl fmt::Display for ProtocolKind {
     }
 }
 
-pub trait Protocol2 {
+pub trait Protocol {
     fn kind(&self) -> ProtocolKind;
 
     fn send_phase(
@@ -51,11 +51,11 @@ pub trait Protocol2 {
         topology: &Topology,
         inbox: Vec<(usize, ProtocolMsg)>,
         network: &mut Network<ProtocolMsg>,
-    ) -> Protocol2StepResult;
+    ) -> ProtocolStepResult;
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct Protocol2StepResult {
+pub struct ProtocolStepResult {
     pub next_set: HashSet<Element>,
     pub metrics: LocalMetrics,
 }

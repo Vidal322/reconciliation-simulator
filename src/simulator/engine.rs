@@ -12,7 +12,7 @@ use crate::simulator::workload::{Workload, WorkloadConfig};
 
 use crate::simulator::network::Network;
 use crate::simulator::protocols::messages::ProtocolMsg;
-use crate::simulator::protocols::{LocalMetrics, Protocol2};
+use crate::simulator::protocols::{LocalMetrics, Protocol};
 
 use std::collections::HashSet;
 
@@ -29,7 +29,7 @@ pub struct Simulation {
     config: SimulationConfig,
     replicas: Vec<Replica>,
     topology: Box<Topology>,
-    protocol: Box<dyn Protocol2>,
+    protocol: Box<dyn Protocol>,
     network: Network<ProtocolMsg>,
     metrics: MetricsCollector,
     target_union: HashSet<Element>,
@@ -78,7 +78,7 @@ impl Simulation {
 
         let network = Network::from_topology(&topology);
 
-        let protocol: Box<dyn Protocol2> = match config.protocol {
+        let protocol: Box<dyn Protocol> = match config.protocol {
             ProtocolKind::FullStateTransfer => Box::new(FullStateTransfer::new()),
             ProtocolKind::Riblt => Box::new(RibltProtocol::new()),
             ProtocolKind::HybridRbfRiblt => Box::new(HybridRbfRibltProtocol::new()),

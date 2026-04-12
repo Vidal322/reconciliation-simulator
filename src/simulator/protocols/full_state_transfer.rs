@@ -1,6 +1,6 @@
 use crate::simulator::network::Network;
 use crate::simulator::protocols::messages::ProtocolMsg;
-use crate::simulator::protocols::{LocalMetrics, Protocol2, Protocol2StepResult, ProtocolKind};
+use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolStepResult, ProtocolKind};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
@@ -13,7 +13,7 @@ impl FullStateTransfer {
     }
 }
 
-impl Protocol2 for FullStateTransfer {
+impl Protocol for FullStateTransfer {
     fn kind(&self) -> ProtocolKind {
         ProtocolKind::FullStateTransfer
     }
@@ -42,7 +42,7 @@ impl Protocol2 for FullStateTransfer {
         _topology: &Topology,
         inbox: Vec<(usize, ProtocolMsg)>,
         _network: &mut Network<ProtocolMsg>,
-    ) -> Protocol2StepResult {
+    ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
         for (_from, msg) in inbox {
             if let ProtocolMsg::Elements(els) = msg {
@@ -52,7 +52,7 @@ impl Protocol2 for FullStateTransfer {
             }
         }
 
-        Protocol2StepResult {
+        ProtocolStepResult {
             next_set,
             metrics: LocalMetrics::default(),
         }
