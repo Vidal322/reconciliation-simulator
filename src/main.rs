@@ -12,6 +12,7 @@ fn main() {
         ProtocolKind::Riblt,
         ProtocolKind::StaticBfIblt,
         ProtocolKind::HybridRbfRiblt,
+        ProtocolKind::MultiReplicaV2,
     ];
 
     let topologies = [TopologyKind::Star, TopologyKind::Tree, TopologyKind::Chord];
@@ -110,6 +111,9 @@ fn main() {
                     println!(
                         "Expected: metadata bytes lower than pure RIBLT in many cases, and some state bytes."
                     );
+                }
+                ProtocolKind::MultiReplicaV2 => {
+                    println!("Agent-target protocol. Baseline: full state transfer.");
                 }
             }
 

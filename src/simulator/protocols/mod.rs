@@ -2,6 +2,7 @@ pub mod bf_iblt;
 pub mod full_state_transfer;
 pub mod hybrid_rbf_riblt;
 pub mod messages;
+pub mod multi_replica_v2;
 pub mod riblt;
 
 use std::collections::HashSet;
@@ -17,6 +18,7 @@ use crate::simulator::topology::Topology;
 pub enum ProtocolKind {
     FullStateTransfer,
     HybridRbfRiblt,
+    MultiReplicaV2,
     Riblt,
     StaticBfIblt,
 }
@@ -26,6 +28,7 @@ impl fmt::Display for ProtocolKind {
         let s = match self {
             ProtocolKind::FullStateTransfer => "FullStateTransfer",
             ProtocolKind::HybridRbfRiblt => "HybridRbfRiblt",
+            ProtocolKind::MultiReplicaV2 => "MultiReplicaV2",
             ProtocolKind::Riblt => "Riblt",
             ProtocolKind::StaticBfIblt => "StaticBfIblt",
         };

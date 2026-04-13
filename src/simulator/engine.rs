@@ -3,6 +3,7 @@ use crate::simulator::metrics::{MetricsCollector, MetricsSnapshot};
 use crate::simulator::protocols::bf_iblt::StaticBfIbltProtocol;
 use crate::simulator::protocols::full_state_transfer::FullStateTransfer;
 use crate::simulator::protocols::hybrid_rbf_riblt::HybridRbfRibltProtocol;
+use crate::simulator::protocols::multi_replica_v2::MultiReplicaV2Protocol;
 use crate::simulator::protocols::riblt::RibltProtocol;
 
 use crate::simulator::protocols::ProtocolKind;
@@ -83,6 +84,7 @@ impl Simulation {
             ProtocolKind::FullStateTransfer => Box::new(FullStateTransfer::new()),
             ProtocolKind::Riblt => Box::new(RibltProtocol::new()),
             ProtocolKind::HybridRbfRiblt => Box::new(HybridRbfRibltProtocol::new()),
+            ProtocolKind::MultiReplicaV2 => Box::new(MultiReplicaV2Protocol::new()),
             ProtocolKind::StaticBfIblt => Box::new(StaticBfIbltProtocol::new()),
         };
 
