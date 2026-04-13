@@ -90,11 +90,7 @@ impl Protocol for StaticBfIbltProtocol {
                 network.send(
                     replica_id,
                     neighbor_id,
-                    ProtocolMsg::BloomFilter {
-                        bit_len,
-                        digests: digests.clone(),
-                        false_positive_rate: self.false_positive_rate,
-                    },
+                    ProtocolMsg::BloomFilter { bit_len },
                     SimulatorHint::BloomDigests {
                         digests: digests.clone(),
                         false_positive_rate: self.false_positive_rate,

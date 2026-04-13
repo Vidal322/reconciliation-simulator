@@ -63,11 +63,7 @@ impl Protocol for RibltProtocol {
                 network.send(
                     replica_id,
                     neighbor_id,
-                    ProtocolMsg::RibltSketch {
-                        symbols: 0,
-                        digests: digests.clone(),
-                        elements: Vec::new(),
-                    },
+                    ProtocolMsg::RibltSketch { symbols: 0 },
                     SimulatorHint::RibltDigests { digests: digests.clone() },
                 );
             }

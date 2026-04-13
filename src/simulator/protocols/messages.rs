@@ -5,24 +5,9 @@ use std::mem;
 
 pub enum ProtocolMsg {
     Elements(Vec<Element>),
-
-    RibltSketch {
-        symbols: usize,
-        digests: Vec<u64>,
-        elements: Vec<Element>,
-    },
-
-    BloomFilter {
-        bit_len: usize,
-        digests: Vec<u64>,
-        false_positive_rate: f64,
-    },
-
-    RatelessBloom {
-        byte_len: usize,
-        digests: Vec<u64>,
-        bloom_bits: usize,
-    },
+    RibltSketch { symbols: usize },
+    BloomFilter { bit_len: usize },
+    RatelessBloom { byte_len: usize },
 }
 
 impl WireSized for ProtocolMsg {
@@ -96,22 +81,14 @@ mod tests {
 
     #[test]
     fn riblt_sketch_bills_symbols_as_metadata() {
-        let msg = ProtocolMsg::RibltSketch {
-            symbols: 12,
-            digests: vec![],
-            elements: vec![],
-        };
+        let msg = ProtocolMsg::RibltSketch { symbols: 12 };
         assert_eq!(msg.state_bytes(), 0);
         assert_eq!(msg.metadata_bytes(), 12 * mem::size_of::<u64>() as u64);
     }
 
     #[test]
     fn bloom_filter_bills_bits_plus_header() {
-        let msg = ProtocolMsg::BloomFilter {
-            bit_len: 128,
-            digests: vec![],
-            false_positive_rate: 0.01,
-        };
+        let msg = ProtocolMsg::BloomFilter { bit_len: 128 };
         let expected_bytes = 16 + mem::size_of::<usize>() + mem::size_of::<u64>();
         assert_eq!(msg.metadata_bytes(), expected_bytes as u64);
         assert_eq!(msg.state_bytes(), 0);
@@ -119,11 +96,7 @@ mod tests {
 
     #[test]
     fn rateless_bloom_bills_byte_len_as_metadata() {
-        let msg = ProtocolMsg::RatelessBloom {
-            byte_len: 77,
-            digests: vec![],
-            bloom_bits: 128,
-        };
+        let msg = ProtocolMsg::RatelessBloom { byte_len: 77 };
         assert_eq!(msg.metadata_bytes(), 77);
         assert_eq!(msg.state_bytes(), 0);
     }

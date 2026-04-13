@@ -93,11 +93,7 @@ impl Protocol for HybridRbfRibltProtocol {
                 network.send(
                     replica_id,
                     neighbor_id,
-                    ProtocolMsg::RatelessBloom {
-                        byte_len: 0,
-                        digests: digests.clone(),
-                        bloom_bits,
-                    },
+                    ProtocolMsg::RatelessBloom { byte_len: 0 },
                     SimulatorHint::RatelessBloomDigests {
                         digests: digests.clone(),
                         bloom_bits,
