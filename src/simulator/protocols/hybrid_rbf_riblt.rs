@@ -6,8 +6,8 @@ use crate::simulator::algorithms::rateless_bloom::bayesian_cost::RATELESS_SET_RE
 use crate::simulator::algorithms::rateless_bloom::expected_cost::ExpectedCostFactory;
 use crate::simulator::algorithms::rateless_bloom::{RatelessBF, StoppingStrategyFactory};
 use crate::simulator::algorithms::riblt::RatelessIBLT;
-use crate::simulator::network::Network;
-use crate::simulator::protocols::messages::ProtocolMsg;
+use crate::simulator::network::{RecvView, SendView};
+use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
 use crate::simulator::protocols::{
     LocalMetrics, Protocol, ProtocolStepResult, ProtocolKind,
 };
@@ -81,24 +81,13 @@ impl Protocol for HybridRbfRibltProtocol {
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
-        network: &mut Network<ProtocolMsg>,
+        network: &mut SendView<ProtocolMsg>,
     ) {
         let state = self.state.entry(replica_id).or_default();
 
         if state.pending.is_empty() {
-            // Rateless Bloom round: compute bloom_bits, ship the
-            // message with digests as unbilled auxiliary.
             let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
             let bloom_bits = self.bloom_bits_for(digests.len());
-
-            // Build a throwaway filter just to get byte_len for billing.
-            let filter = RatelessBF::new(digests.clone(), bloom_bits);
-            // The filter hasn't been extended yet so size_of is 0.
-            // The actual byte_len will be determined at decode time and
-            // billed via record_decoded_metadata. Ship byte_len=0 here;
-            // WireSized will bill 0 metadata on send, and the real cost
-            // is billed in recv_phase.
-            let _ = filter;
 
             for &neighbor_id in topology.neighbors(replica_id) {
                 network.send(
@@ -106,6 +95,10 @@ impl Protocol for HybridRbfRibltProtocol {
                     neighbor_id,
                     ProtocolMsg::RatelessBloom {
                         byte_len: 0,
+                        digests: digests.clone(),
+                        bloom_bits,
+                    },
+                    SimulatorHint::RatelessBloomDigests {
                         digests: digests.clone(),
                         bloom_bits,
                     },
@@ -119,6 +112,7 @@ impl Protocol for HybridRbfRibltProtocol {
                         replica_id,
                         neighbor_id,
                         ProtocolMsg::Elements(elements),
+                        SimulatorHint::None,
                     );
                 }
             }
@@ -130,8 +124,8 @@ impl Protocol for HybridRbfRibltProtocol {
         replica_id: usize,
         local: &Replica,
         _topology: &Topology,
-        inbox: Vec<(usize, ProtocolMsg)>,
-        network: &mut Network<ProtocolMsg>,
+        inbox: Vec<(usize, ProtocolMsg, SimulatorHint)>,
+        network: &mut RecvView<ProtocolMsg>,
     ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
 
@@ -139,25 +133,22 @@ impl Protocol for HybridRbfRibltProtocol {
         let mut decode_time = Duration::ZERO;
         let mut false_matches = 0usize;
 
-        // Capture m_ratio before mutably borrowing self.state.
-        let m_ratio = self.m_ratio;
         let state = self.state.entry(replica_id).or_default();
 
-        for (from, msg) in inbox {
+        for (from, msg, hint) in inbox {
             match msg {
-                ProtocolMsg::RatelessBloom {
-                    byte_len: _,
-                    digests: sender_digests,
-                    bloom_bits,
-                } => {
+                ProtocolMsg::RatelessBloom { .. } => {
+                    let (sender_digests, bloom_bits) = match hint {
+                        SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
+                            (digests, bloom_bits)
+                        }
+                        _ => panic!("expected RatelessBloomDigests hint"),
+                    };
+
                     // Rebuild the sender's RatelessBF from its digests.
                     let mut sender_filter =
                         RatelessBF::new(sender_digests.clone(), bloom_bits);
 
-                    // Compute the effective m_ratio the sender used.
-                    // (Using captured m_ratio to avoid re-borrowing self.)
-                    let _ = m_ratio; // m_ratio is for bloom_bits_for;
-                    // effective_m_ratio is purely arithmetic, inline it.
                     let effective_m_ratio =
                         bloom_bits as f64 / sender_digests.len().max(1) as f64;
 
@@ -203,8 +194,6 @@ impl Protocol for HybridRbfRibltProtocol {
                         encode_time += sender_riblt.t_enc();
                         decode_time += sender_riblt.t_dec();
 
-                        // remote_only from sender_riblt = items in
-                        // common that are NOT in sender = ours only.
                         let riblt_local_only =
                             sender_riblt.get_remote_only_symbols();
                         false_matches += riblt_local_only.len();
@@ -251,28 +240,49 @@ impl Protocol for HybridRbfRibltProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simulator::network::{HintStore, Network};
     use crate::simulator::protocols::test_helpers::make_replica;
     use std::collections::HashSet;
 
     #[test]
-    fn protocol2_hybrid_converges_in_two_rounds() {
+    fn hybrid_converges_in_two_rounds() {
         let mut protocol = HybridRbfRibltProtocol::new();
         let topology = Topology::star(2);
         let mut replicas = vec![make_replica(0, &[1, 2, 3]), make_replica(1, &[2, 3, 4])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut hints = HintStore::new();
 
         for _ in 0..2 {
-            for id in 0..replicas.len() {
-                protocol.send_phase(id, &replicas[id], &topology, &mut network);
+            {
+                let mut send_view = SendView::new(&mut network, &mut hints);
+                for id in 0..replicas.len() {
+                    protocol.send_phase(id, &replicas[id], &topology, &mut send_view);
+                }
             }
-            let next_sets: Vec<_> = (0..replicas.len())
-                .map(|id| {
-                    let inbox = network.drain_inbox(id);
-                    protocol
-                        .recv_phase(id, &replicas[id], &topology, inbox, &mut network)
-                        .next_set
-                })
-                .collect();
+            let next_sets: Vec<_> = {
+                let inboxes: Vec<_> = (0..replicas.len())
+                    .map(|id| {
+                        network
+                            .drain_inbox(id)
+                            .into_iter()
+                            .map(|(from, msg)| {
+                                let hint = hints.drain_for(from, id);
+                                (from, msg, hint)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                let mut recv_view = RecvView::new(&mut network);
+                inboxes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, inbox)| {
+                        protocol
+                            .recv_phase(id, &replicas[id], &topology, inbox, &mut recv_view)
+                            .next_set
+                    })
+                    .collect()
+            };
             for (replica, next) in replicas.iter_mut().zip(next_sets) {
                 replica.set = next;
             }
@@ -289,23 +299,45 @@ mod tests {
     }
 
     #[test]
-    fn protocol2_hybrid_identical_sets_no_elements_sent() {
+    fn hybrid_identical_sets_no_elements_sent() {
         let mut protocol = HybridRbfRibltProtocol::new();
         let topology = Topology::star(2);
         let replicas = vec![make_replica(0, &[5, 6, 7]), make_replica(1, &[5, 6, 7])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut hints = HintStore::new();
 
-        for id in 0..replicas.len() {
-            protocol.send_phase(id, &replicas[id], &topology, &mut network);
+        {
+            let mut send_view = SendView::new(&mut network, &mut hints);
+            for id in 0..replicas.len() {
+                protocol.send_phase(id, &replicas[id], &topology, &mut send_view);
+            }
         }
-        for id in 0..replicas.len() {
-            let inbox = network.drain_inbox(id);
-            let _ = protocol.recv_phase(id, &replicas[id], &topology, inbox, &mut network);
+        {
+            let inboxes: Vec<_> = (0..replicas.len())
+                .map(|id| {
+                    network
+                        .drain_inbox(id)
+                        .into_iter()
+                        .map(|(from, msg)| {
+                            let hint = hints.drain_for(from, id);
+                            (from, msg, hint)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            let mut recv_view = RecvView::new(&mut network);
+            for (id, inbox) in inboxes.into_iter().enumerate() {
+                let _ = protocol.recv_phase(id, &replicas[id], &topology, inbox, &mut recv_view);
+            }
         }
 
         network.reset();
-        for id in 0..replicas.len() {
-            protocol.send_phase(id, &replicas[id], &topology, &mut network);
+        hints.reset();
+        {
+            let mut send_view = SendView::new(&mut network, &mut hints);
+            for id in 0..replicas.len() {
+                protocol.send_phase(id, &replicas[id], &topology, &mut send_view);
+            }
         }
         for id in 0..replicas.len() {
             for (_from, msg) in network.drain_inbox(id) {

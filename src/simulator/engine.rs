@@ -10,7 +10,7 @@ use crate::simulator::replica::{Element, Replica, ReplicaPhase};
 use crate::simulator::topology::{Topology, TopologyKind};
 use crate::simulator::workload::{Workload, WorkloadConfig};
 
-use crate::simulator::network::Network;
+use crate::simulator::network::{HintStore, Network, RecvView, SendView};
 use crate::simulator::protocols::messages::ProtocolMsg;
 use crate::simulator::protocols::{LocalMetrics, Protocol};
 
@@ -31,6 +31,7 @@ pub struct Simulation {
     topology: Box<Topology>,
     protocol: Box<dyn Protocol>,
     network: Network<ProtocolMsg>,
+    hint_store: HintStore,
     metrics: MetricsCollector,
     target_union: HashSet<Element>,
     current_round: usize,
@@ -91,6 +92,7 @@ impl Simulation {
             topology,
             protocol,
             network,
+            hint_store: HintStore::new(),
             metrics: MetricsCollector::new(),
             target_union: workload.target_union,
             current_round: 0,
@@ -156,31 +158,53 @@ impl Simulation {
         self.mark_active();
 
         self.network.reset();
+        self.hint_store.reset();
 
         // Phase 1: every replica emits its outbound messages.
-        for replica_id in 0..self.replicas.len() {
-            self.protocol.send_phase(
-                replica_id,
-                &self.replicas[replica_id],
-                &self.topology,
-                &mut self.network,
-            );
-        }
-
-        // Phase 2: every replica drains its inbox and reconciles.
-        let recv_results: Vec<(HashSet<Element>, LocalMetrics)> = (0..self.replicas.len())
-            .map(|replica_id| {
-                let inbox = self.network.drain_inbox(replica_id);
-                let result = self.protocol.recv_phase(
+        {
+            let mut send_view = SendView::new(&mut self.network, &mut self.hint_store);
+            for replica_id in 0..self.replicas.len() {
+                self.protocol.send_phase(
                     replica_id,
                     &self.replicas[replica_id],
                     &self.topology,
-                    inbox,
-                    &mut self.network,
+                    &mut send_view,
                 );
-                (result.next_set, result.metrics)
+            }
+        }
+
+        // Drain all inboxes and pair with hints.
+        let inboxes: Vec<_> = (0..self.replicas.len())
+            .map(|id| {
+                self.network
+                    .drain_inbox(id)
+                    .into_iter()
+                    .map(|(from, msg)| {
+                        let hint = self.hint_store.drain_for(from, id);
+                        (from, msg, hint)
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect();
+
+        // Phase 2: every replica reconciles from its inbox.
+        let recv_results: Vec<(HashSet<Element>, LocalMetrics)> = {
+            let mut recv_view = RecvView::new(&mut self.network);
+            inboxes
+                .into_iter()
+                .enumerate()
+                .map(|(replica_id, inbox)| {
+                    let result = self.protocol.recv_phase(
+                        replica_id,
+                        &self.replicas[replica_id],
+                        &self.topology,
+                        inbox,
+                        &mut recv_view,
+                    );
+                    (result.next_set, result.metrics)
+                })
+                .collect()
+        };
 
         // Snapshot AFTER recv_phase so decoded metadata is included.
         let stats = self.network.stats();

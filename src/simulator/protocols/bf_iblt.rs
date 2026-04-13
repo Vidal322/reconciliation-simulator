@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use crate::simulator::algorithms::bloom::BloomFilter;
 use crate::simulator::algorithms::riblt::RatelessIBLT;
-use crate::simulator::network::Network;
-use crate::simulator::protocols::messages::ProtocolMsg;
+use crate::simulator::network::{RecvView, SendView};
+use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
 use crate::simulator::protocols::{
     LocalMetrics, Protocol, ProtocolStepResult, ProtocolKind,
 };
@@ -73,15 +73,11 @@ impl Protocol for StaticBfIbltProtocol {
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
-        network: &mut Network<ProtocolMsg>,
+        network: &mut SendView<ProtocolMsg>,
     ) {
         let state = self.state.entry(replica_id).or_default();
 
         if state.pending.is_empty() {
-            // Bloom round: build a Bloom from our digests and ship it
-            // along with the raw digest list (unbilled auxiliary) so the
-            // receiver can (a) test its own digests against the Bloom
-            // and (b) run RIBLT on the candidate positives.
             let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
 
             let bloom: BloomFilter<u64> = BloomFilter::new(
@@ -99,10 +95,13 @@ impl Protocol for StaticBfIbltProtocol {
                         digests: digests.clone(),
                         false_positive_rate: self.false_positive_rate,
                     },
+                    SimulatorHint::BloomDigests {
+                        digests: digests.clone(),
+                        false_positive_rate: self.false_positive_rate,
+                    },
                 );
             }
         } else {
-            // Element round: drain the stash and ship.
             let pending = std::mem::take(&mut state.pending);
             for (neighbor_id, elements) in pending {
                 if !elements.is_empty() {
@@ -110,6 +109,7 @@ impl Protocol for StaticBfIbltProtocol {
                         replica_id,
                         neighbor_id,
                         ProtocolMsg::Elements(elements),
+                        SimulatorHint::None,
                     );
                 }
             }
@@ -121,8 +121,8 @@ impl Protocol for StaticBfIbltProtocol {
         replica_id: usize,
         local: &Replica,
         _topology: &Topology,
-        inbox: Vec<(usize, ProtocolMsg)>,
-        network: &mut Network<ProtocolMsg>,
+        inbox: Vec<(usize, ProtocolMsg, SimulatorHint)>,
+        network: &mut RecvView<ProtocolMsg>,
     ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
 
@@ -132,13 +132,16 @@ impl Protocol for StaticBfIbltProtocol {
 
         let state = self.state.entry(replica_id).or_default();
 
-        for (from, msg) in inbox {
+        for (from, msg, hint) in inbox {
             match msg {
-                ProtocolMsg::BloomFilter {
-                    bit_len: _,
-                    digests: sender_digests,
-                    false_positive_rate,
-                } => {
+                ProtocolMsg::BloomFilter { .. } => {
+                    let (sender_digests, false_positive_rate) = match hint {
+                        SimulatorHint::BloomDigests { digests, false_positive_rate } => {
+                            (digests, false_positive_rate)
+                        }
+                        _ => panic!("expected BloomDigests hint"),
+                    };
+
                     // Rebuild the sender's Bloom from its digests.
                     let mut bloom = BloomFilter::new(
                         sender_digests.len().max(1),
@@ -167,19 +170,14 @@ impl Protocol for StaticBfIbltProtocol {
 
                     for &digest in &local_digests {
                         if bloom.timed_contains(&digest) {
-                            // Bloom says sender has it — might be true
-                            // or a false positive.
                             candidate_positives.push(digest);
                         } else {
-                            // Bloom says sender does NOT have it — this
-                            // is definitely ours only. Sender needs it.
                             confirmed_local_only.push(digest);
                         }
                     }
                     decode_time += bloom.t_dec();
 
-                    // Resolve false positives among candidate_positives
-                    // via RIBLT against the sender's full digest list.
+                    // Resolve false positives via RIBLT.
                     let mut recovered_local_only = confirmed_local_only;
 
                     if !candidate_positives.is_empty() {
@@ -200,9 +198,6 @@ impl Protocol for StaticBfIbltProtocol {
                         encode_time += sender_riblt.t_enc();
                         decode_time += sender_riblt.t_dec();
 
-                        // remote_only from sender_riblt's perspective
-                        // = candidate digests NOT in sender's set
-                        // = false positives = things only we have.
                         let riblt_local_only =
                             sender_riblt.get_remote_only_symbols();
                         false_matches += riblt_local_only.len();
@@ -249,28 +244,49 @@ impl Protocol for StaticBfIbltProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simulator::network::{HintStore, Network};
     use crate::simulator::protocols::test_helpers::make_replica;
     use std::collections::HashSet;
 
     #[test]
-    fn protocol2_bf_iblt_converges_in_two_rounds() {
+    fn bf_iblt_converges_in_two_rounds() {
         let mut protocol = StaticBfIbltProtocol::new();
         let topology = Topology::star(2);
         let mut replicas = vec![make_replica(0, &[1, 2, 3]), make_replica(1, &[2, 3, 4])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut hints = HintStore::new();
 
         for _ in 0..2 {
-            for id in 0..replicas.len() {
-                protocol.send_phase(id, &replicas[id], &topology, &mut network);
+            {
+                let mut send_view = SendView::new(&mut network, &mut hints);
+                for id in 0..replicas.len() {
+                    protocol.send_phase(id, &replicas[id], &topology, &mut send_view);
+                }
             }
-            let next_sets: Vec<_> = (0..replicas.len())
-                .map(|id| {
-                    let inbox = network.drain_inbox(id);
-                    protocol
-                        .recv_phase(id, &replicas[id], &topology, inbox, &mut network)
-                        .next_set
-                })
-                .collect();
+            let next_sets: Vec<_> = {
+                let inboxes: Vec<_> = (0..replicas.len())
+                    .map(|id| {
+                        network
+                            .drain_inbox(id)
+                            .into_iter()
+                            .map(|(from, msg)| {
+                                let hint = hints.drain_for(from, id);
+                                (from, msg, hint)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                let mut recv_view = RecvView::new(&mut network);
+                inboxes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, inbox)| {
+                        protocol
+                            .recv_phase(id, &replicas[id], &topology, inbox, &mut recv_view)
+                            .next_set
+                    })
+                    .collect()
+            };
             for (replica, next) in replicas.iter_mut().zip(next_sets) {
                 replica.set = next;
             }
@@ -287,25 +303,47 @@ mod tests {
     }
 
     #[test]
-    fn protocol2_bf_iblt_identical_sets_no_elements_sent() {
+    fn bf_iblt_identical_sets_no_elements_sent() {
         let mut protocol = StaticBfIbltProtocol::new();
         let topology = Topology::star(2);
         let replicas = vec![make_replica(0, &[5, 6, 7]), make_replica(1, &[5, 6, 7])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut hints = HintStore::new();
 
         // Bloom round
-        for id in 0..replicas.len() {
-            protocol.send_phase(id, &replicas[id], &topology, &mut network);
+        {
+            let mut send_view = SendView::new(&mut network, &mut hints);
+            for id in 0..replicas.len() {
+                protocol.send_phase(id, &replicas[id], &topology, &mut send_view);
+            }
         }
-        for id in 0..replicas.len() {
-            let inbox = network.drain_inbox(id);
-            let _ = protocol.recv_phase(id, &replicas[id], &topology, inbox, &mut network);
+        {
+            let inboxes: Vec<_> = (0..replicas.len())
+                .map(|id| {
+                    network
+                        .drain_inbox(id)
+                        .into_iter()
+                        .map(|(from, msg)| {
+                            let hint = hints.drain_for(from, id);
+                            (from, msg, hint)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            let mut recv_view = RecvView::new(&mut network);
+            for (id, inbox) in inboxes.into_iter().enumerate() {
+                let _ = protocol.recv_phase(id, &replicas[id], &topology, inbox, &mut recv_view);
+            }
         }
 
         // Next send_phase should emit Blooms again (stash empty), not Elements.
         network.reset();
-        for id in 0..replicas.len() {
-            protocol.send_phase(id, &replicas[id], &topology, &mut network);
+        hints.reset();
+        {
+            let mut send_view = SendView::new(&mut network, &mut hints);
+            for id in 0..replicas.len() {
+                protocol.send_phase(id, &replicas[id], &topology, &mut send_view);
+            }
         }
         for id in 0..replicas.len() {
             for (_from, msg) in network.drain_inbox(id) {

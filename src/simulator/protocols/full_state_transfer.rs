@@ -1,5 +1,5 @@
-use crate::simulator::network::Network;
-use crate::simulator::protocols::messages::ProtocolMsg;
+use crate::simulator::network::{RecvView, SendView};
+use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
 use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolStepResult, ProtocolKind};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
@@ -23,7 +23,7 @@ impl Protocol for FullStateTransfer {
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
-        network: &mut Network<ProtocolMsg>,
+        network: &mut SendView<ProtocolMsg>,
     ) {
         let payload: Vec<Element> = local.set.iter().cloned().collect();
         for &neighbor_id in topology.neighbors(replica_id) {
@@ -31,6 +31,7 @@ impl Protocol for FullStateTransfer {
                 replica_id,
                 neighbor_id,
                 ProtocolMsg::Elements(payload.clone()),
+                SimulatorHint::None,
             );
         }
     }
@@ -40,11 +41,11 @@ impl Protocol for FullStateTransfer {
         _replica_id: usize,
         local: &Replica,
         _topology: &Topology,
-        inbox: Vec<(usize, ProtocolMsg)>,
-        _network: &mut Network<ProtocolMsg>,
+        inbox: Vec<(usize, ProtocolMsg, SimulatorHint)>,
+        _network: &mut RecvView<ProtocolMsg>,
     ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
-        for (_from, msg) in inbox {
+        for (_from, msg, _hint) in inbox {
             if let ProtocolMsg::Elements(els) = msg {
                 for element in els {
                     next_set.insert(element);
@@ -62,6 +63,7 @@ impl Protocol for FullStateTransfer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simulator::network::{HintStore, Network};
     use crate::simulator::protocols::test_helpers::make_element;
     use std::collections::HashSet;
 
@@ -71,7 +73,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol2_full_state_transfer_bills_full_neighbour_set() {
+    fn full_state_transfer_bills_full_neighbour_set() {
         let mut protocol = FullStateTransfer::new();
         let topology = Topology::star(2);
         let replicas = vec![
@@ -86,9 +88,13 @@ mod tests {
             ),
         ];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut hints = HintStore::new();
 
-        for (id, replica) in replicas.iter().enumerate() {
-            protocol.send_phase(id, replica, &topology, &mut network);
+        {
+            let mut send_view = SendView::new(&mut network, &mut hints);
+            for (id, replica) in replicas.iter().enumerate() {
+                protocol.send_phase(id, replica, &topology, &mut send_view);
+            }
         }
 
         let expected_node0 = (std::mem::size_of::<u64>() + 4) as u64;
@@ -104,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol2_full_state_transfer_recv_merges_neighbours() {
+    fn full_state_transfer_recv_merges_neighbours() {
         let mut protocol = FullStateTransfer::new();
         let topology = Topology::star(2);
         let replicas = vec![
@@ -112,13 +118,25 @@ mod tests {
             make_replica(1, vec![make_element(2, 2, 4), make_element(3, 3, 4)]),
         ];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut hints = HintStore::new();
 
-        for (id, replica) in replicas.iter().enumerate() {
-            protocol.send_phase(id, replica, &topology, &mut network);
+        {
+            let mut send_view = SendView::new(&mut network, &mut hints);
+            for (id, replica) in replicas.iter().enumerate() {
+                protocol.send_phase(id, replica, &topology, &mut send_view);
+            }
         }
 
-        let inbox_0 = network.drain_inbox(0);
-        let result_0 = protocol.recv_phase(0, &replicas[0], &topology, inbox_0, &mut network);
+        let inbox_0: Vec<(usize, ProtocolMsg, SimulatorHint)> = network
+            .drain_inbox(0)
+            .into_iter()
+            .map(|(from, msg)| {
+                let hint = hints.drain_for(from, 0);
+                (from, msg, hint)
+            })
+            .collect();
+        let mut recv_view = RecvView::new(&mut network);
+        let result_0 = protocol.recv_phase(0, &replicas[0], &topology, inbox_0, &mut recv_view);
 
         let digests = result_0
             .next_set

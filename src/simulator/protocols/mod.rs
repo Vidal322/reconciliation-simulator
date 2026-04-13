@@ -8,8 +8,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::time::Duration;
 
-use crate::simulator::network::Network;
-use crate::simulator::protocols::messages::ProtocolMsg;
+use crate::simulator::network::{RecvView, SendView};
+use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
@@ -41,7 +41,7 @@ pub trait Protocol {
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
-        network: &mut Network<ProtocolMsg>,
+        network: &mut SendView<ProtocolMsg>,
     );
 
     fn recv_phase(
@@ -49,8 +49,8 @@ pub trait Protocol {
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
-        inbox: Vec<(usize, ProtocolMsg)>,
-        network: &mut Network<ProtocolMsg>,
+        inbox: Vec<(usize, ProtocolMsg, SimulatorHint)>,
+        network: &mut RecvView<ProtocolMsg>,
     ) -> ProtocolStepResult;
 }
 

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::simulator::algorithms::riblt::RatelessIBLT;
-use crate::simulator::network::Network;
-use crate::simulator::protocols::messages::ProtocolMsg;
+use crate::simulator::network::{RecvView, SendView};
+use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
 use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolStepResult, ProtocolKind};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
@@ -51,7 +51,7 @@ impl Protocol for RibltProtocol {
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
-        network: &mut Network<ProtocolMsg>,
+        network: &mut SendView<ProtocolMsg>,
     ) {
         let state = self.state.entry(replica_id).or_default();
 
@@ -68,6 +68,7 @@ impl Protocol for RibltProtocol {
                         digests: digests.clone(),
                         elements: Vec::new(),
                     },
+                    SimulatorHint::RibltDigests { digests: digests.clone() },
                 );
             }
         } else {
@@ -75,7 +76,12 @@ impl Protocol for RibltProtocol {
             let pending = std::mem::take(&mut state.pending);
             for (neighbor_id, elements) in pending {
                 if !elements.is_empty() {
-                    network.send(replica_id, neighbor_id, ProtocolMsg::Elements(elements));
+                    network.send(
+                        replica_id,
+                        neighbor_id,
+                        ProtocolMsg::Elements(elements),
+                        SimulatorHint::None,
+                    );
                 }
             }
         }
@@ -86,8 +92,8 @@ impl Protocol for RibltProtocol {
         replica_id: usize,
         local: &Replica,
         _topology: &Topology,
-        inbox: Vec<(usize, ProtocolMsg)>,
-        network: &mut Network<ProtocolMsg>,
+        inbox: Vec<(usize, ProtocolMsg, SimulatorHint)>,
+        network: &mut RecvView<ProtocolMsg>,
     ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
         let local_digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
@@ -97,12 +103,14 @@ impl Protocol for RibltProtocol {
 
         let state = self.state.entry(replica_id).or_default();
 
-        for (from, msg) in inbox {
+        for (from, msg, hint) in inbox {
             match msg {
-                ProtocolMsg::RibltSketch {
-                    digests: remote_digests,
-                    ..
-                } => {
+                ProtocolMsg::RibltSketch { .. } => {
+                    let remote_digests = match hint {
+                        SimulatorHint::RibltDigests { digests } => digests,
+                        _ => panic!("expected RibltDigests hint"),
+                    };
+
                     // Run the RIBLT decode against the sender's
                     // digests; bill the true sketch length now.
                     let mut local_riblt = RatelessIBLT::riblt_from(local_digests.clone());
@@ -152,28 +160,49 @@ impl Protocol for RibltProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simulator::network::{HintStore, Network};
     use crate::simulator::protocols::test_helpers::make_replica;
     use std::collections::HashSet;
 
     #[test]
-    fn protocol2_riblt_converges_in_two_rounds() {
+    fn riblt_converges_in_two_rounds() {
         let mut protocol = RibltProtocol::new();
         let topology = Topology::star(2);
         let mut replicas = vec![make_replica(0, &[1, 2, 3]), make_replica(1, &[2, 3, 4])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut hints = HintStore::new();
 
         for _ in 0..2 {
-            for id in 0..replicas.len() {
-                protocol.send_phase(id, &replicas[id], &topology, &mut network);
+            {
+                let mut send_view = SendView::new(&mut network, &mut hints);
+                for id in 0..replicas.len() {
+                    protocol.send_phase(id, &replicas[id], &topology, &mut send_view);
+                }
             }
-            let next_sets: Vec<_> = (0..replicas.len())
-                .map(|id| {
-                    let inbox = network.drain_inbox(id);
-                    protocol
-                        .recv_phase(id, &replicas[id], &topology, inbox, &mut network)
-                        .next_set
-                })
-                .collect();
+            let next_sets: Vec<_> = {
+                let inboxes: Vec<_> = (0..replicas.len())
+                    .map(|id| {
+                        network
+                            .drain_inbox(id)
+                            .into_iter()
+                            .map(|(from, msg)| {
+                                let hint = hints.drain_for(from, id);
+                                (from, msg, hint)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                let mut recv_view = RecvView::new(&mut network);
+                inboxes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, inbox)| {
+                        protocol
+                            .recv_phase(id, &replicas[id], &topology, inbox, &mut recv_view)
+                            .next_set
+                    })
+                    .collect()
+            };
             for (replica, next) in replicas.iter_mut().zip(next_sets) {
                 replica.set = next;
             }
@@ -190,26 +219,48 @@ mod tests {
     }
 
     #[test]
-    fn protocol2_riblt_zero_diff_only_emits_sketches() {
+    fn riblt_zero_diff_only_emits_sketches() {
         let mut protocol = RibltProtocol::new();
         let topology = Topology::star(2);
         let replicas = vec![make_replica(0, &[5, 6, 7]), make_replica(1, &[5, 6, 7])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut hints = HintStore::new();
 
         // Sketch round: send + recv.
-        for id in 0..replicas.len() {
-            protocol.send_phase(id, &replicas[id], &topology, &mut network);
+        {
+            let mut send_view = SendView::new(&mut network, &mut hints);
+            for id in 0..replicas.len() {
+                protocol.send_phase(id, &replicas[id], &topology, &mut send_view);
+            }
         }
-        for id in 0..replicas.len() {
-            let inbox = network.drain_inbox(id);
-            let _ = protocol.recv_phase(id, &replicas[id], &topology, inbox, &mut network);
+        {
+            let inboxes: Vec<_> = (0..replicas.len())
+                .map(|id| {
+                    network
+                        .drain_inbox(id)
+                        .into_iter()
+                        .map(|(from, msg)| {
+                            let hint = hints.drain_for(from, id);
+                            (from, msg, hint)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            let mut recv_view = RecvView::new(&mut network);
+            for (id, inbox) in inboxes.into_iter().enumerate() {
+                let _ = protocol.recv_phase(id, &replicas[id], &topology, inbox, &mut recv_view);
+            }
         }
 
         // Next send_phase should still emit only sketches because the
         // pending stash is empty (no element diffs).
         network.reset();
-        for id in 0..replicas.len() {
-            protocol.send_phase(id, &replicas[id], &topology, &mut network);
+        hints.reset();
+        {
+            let mut send_view = SendView::new(&mut network, &mut hints);
+            for id in 0..replicas.len() {
+                protocol.send_phase(id, &replicas[id], &topology, &mut send_view);
+            }
         }
         for id in 0..replicas.len() {
             for (_from, msg) in network.drain_inbox(id) {
