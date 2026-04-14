@@ -1,0 +1,2 @@
+attempt	fitness	star_bytes	tree_bytes	chord_bytes	star_rounds	tree_rounds	chord_rounds	kept	description
+0	12876691	2771833	3586083	6518775	6	11	6	yes	baseline: bloom-filter reconciliation with BF-skip, direct broadcast, piggybacking
