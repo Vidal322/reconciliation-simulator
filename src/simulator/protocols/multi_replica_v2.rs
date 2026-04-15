@@ -41,6 +41,10 @@ struct ReplicaState {
     received_from: HashMap<usize, HashSet<u64>>,
     /// Set size the last time we sent a sketch.  0 ⟹ not yet sent.
     sketch_set_size: usize,
+    /// Whether the initial sketch has been sent for this replica.
+    /// For Star/Tree, eager forwarding handles all subsequent propagation,
+    /// so we skip additional sketch rounds after the first.
+    first_sketch_sent: bool,
 }
 
 impl MultiReplicaV2Protocol {
@@ -117,9 +121,19 @@ impl Protocol for MultiReplicaV2Protocol {
         }
 
         // ── 3. Send sketch if our set has grown since the last sketch. ──
+        //    For Star/Tree: after the first sketch the eager-forwarding chain
+        //    delivers all elements without further sketch overhead.  Only
+        //    Chord needs ongoing sketch rounds because dense connectivity
+        //    means elements don't self-route efficiently.
         let current_size = local.set.len();
-        if current_size != state.sketch_set_size {
+        let need_sketch = if topology.kind == TopologyKind::Chord {
+            current_size != state.sketch_set_size
+        } else {
+            !state.first_sketch_sent
+        };
+        if need_sketch {
             state.sketch_set_size = current_size;
+            state.first_sketch_sent = true;
             let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
 
             match topology.kind {
@@ -155,7 +169,7 @@ impl Protocol for MultiReplicaV2Protocol {
         &mut self,
         replica_id: usize,
         local: &Replica,
-        _topology: &Topology,
+        topology: &Topology,
         inbox: Vec<(usize, ProtocolMsg, SimulatorHint)>,
         network: &mut RecvView<ProtocolMsg>,
     ) -> ProtocolStepResult {
@@ -212,11 +226,37 @@ impl Protocol for MultiReplicaV2Protocol {
 
                     let local_only: HashSet<u64> =
                         local_riblt.get_local_only_symbols().into_iter().collect();
-                    let to_send: Vec<Element> = next_set
-                        .iter()
-                        .filter(|e| local_only.contains(&e.digest))
-                        .cloned()
-                        .collect();
+
+                    // Gossip suppression for Chord: skip element X if we
+                    // received X from a neighbour that is ALSO a neighbour of
+                    // `from`.  That common neighbour likely already sent X to
+                    // `from` directly, so we would just be duplicating the
+                    // transfer.  The RIBLT in the next round will catch any
+                    // elements that were actually missed.
+                    let to_send: Vec<Element> = if topology.kind == TopologyKind::Chord {
+                        let from_neighbors = topology.neighbors(from);
+                        next_set
+                            .iter()
+                            .filter(|e| {
+                                if !local_only.contains(&e.digest) {
+                                    return false;
+                                }
+                                // Suppress if a common neighbour already sent this.
+                                !state.received_from.iter().any(|(&src, digests)| {
+                                    src != replica_id
+                                        && digests.contains(&e.digest)
+                                        && from_neighbors.contains(&src)
+                                })
+                            })
+                            .cloned()
+                            .collect()
+                    } else {
+                        next_set
+                            .iter()
+                            .filter(|e| local_only.contains(&e.digest))
+                            .cloned()
+                            .collect()
+                    };
                     if !to_send.is_empty() {
                         state.pending.entry(from).or_default().extend(to_send);
                     }
