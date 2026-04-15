@@ -2,25 +2,24 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::time::Duration;
 
+use crate::simulator::algorithms::rateless_bloom::bayesian_cost::RATELESS_SET_RECONCILIATION_OVERHEAD;
+use crate::simulator::algorithms::rateless_bloom::expected_cost::ExpectedCostFactory;
+use crate::simulator::algorithms::rateless_bloom::{RatelessBF, StoppingStrategyFactory};
 use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::{RecvView, SendView};
 use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
 use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolKind, ProtocolStepResult};
 use crate::simulator::replica::{Element, Replica};
-use crate::simulator::topology::Topology;
+use crate::simulator::topology::{Topology, TopologyKind};
 
-/// RIBLT-based reconciliation with gossip suppression.
+/// Topology-aware reconciliation:
+/// - Star / Tree: RatelessBF + RIBLT hybrid (lower metadata cost for fewer edges)
+/// - Chord: pure RIBLT (avoids BF overhead multiplied across many edges)
 ///
 /// Each 2-round cycle:
-/// - Sketch round: send RIBLT sketch to every neighbour.
-/// - Element round: send only elements the neighbour is missing.
-///
-/// Gossip suppression: when building to_send for neighbour X, skip
-/// elements that were received from a node that is also X's neighbour.
-/// Since that node sent the element to X simultaneously, X likely
-/// already received it. This reduces redundant multi-path sends on
-/// high-degree topologies (Chord).
+///   Sketch/BF round → Element round → repeat.
 pub struct MultiReplicaV2Protocol {
+    m_ratio: f64,
     state: HashMap<usize, ReplicaState>,
 }
 
@@ -28,15 +27,20 @@ pub struct MultiReplicaV2Protocol {
 struct ReplicaState {
     /// Elements queued to ship to each neighbour in the next send_phase.
     pending: HashMap<usize, Vec<Element>>,
-    /// For each digest, which neighbours sent it to us (for gossip suppression).
-    received_from: HashMap<u64, Vec<usize>>,
 }
 
 impl MultiReplicaV2Protocol {
     pub fn new() -> Self {
         Self {
+            m_ratio: 0.5,
             state: HashMap::new(),
         }
+    }
+
+    fn bloom_bits_for(&self, n: usize) -> usize {
+        let requested = ((n as f64) * self.m_ratio).ceil().max(1.0) as usize;
+        let minimum = RATELESS_SET_RECONCILIATION_OVERHEAD * 8;
+        requested.max(minimum)
     }
 }
 
@@ -55,16 +59,35 @@ impl Protocol for MultiReplicaV2Protocol {
         let state = self.state.entry(replica_id).or_default();
 
         if state.pending.is_empty() {
-            // Sketch round: send RIBLT sketch to every neighbour.
-            // Symbols are billed at decode time in recv_phase.
-            let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
-            for &neighbor_id in topology.neighbors(replica_id) {
-                network.send(
-                    replica_id,
-                    neighbor_id,
-                    ProtocolMsg::RibltSketch { symbols: 0 },
-                    SimulatorHint::RibltDigests { digests: digests.clone() },
-                );
+            match topology.kind {
+                TopologyKind::Chord => {
+                    // Pure RIBLT: lower per-edge cost on high-degree topology.
+                    let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
+                    for &neighbor_id in topology.neighbors(replica_id) {
+                        network.send(
+                            replica_id,
+                            neighbor_id,
+                            ProtocolMsg::RibltSketch { symbols: 0 },
+                            SimulatorHint::RibltDigests { digests: digests.clone() },
+                        );
+                    }
+                }
+                _ => {
+                    // RatelessBF + RIBLT hybrid: more efficient for Star/Tree.
+                    let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
+                    let bloom_bits = self.bloom_bits_for(digests.len());
+                    for &neighbor_id in topology.neighbors(replica_id) {
+                        network.send(
+                            replica_id,
+                            neighbor_id,
+                            ProtocolMsg::RatelessBloom { byte_len: 0 },
+                            SimulatorHint::RatelessBloomDigests {
+                                digests: digests.clone(),
+                                bloom_bits,
+                            },
+                        );
+                    }
+                }
             }
         } else {
             // Element round: drain the stash and ship.
@@ -86,7 +109,7 @@ impl Protocol for MultiReplicaV2Protocol {
         &mut self,
         replica_id: usize,
         local: &Replica,
-        topology: &Topology,
+        _topology: &Topology,
         inbox: Vec<(usize, ProtocolMsg, SimulatorHint)>,
         network: &mut RecvView<ProtocolMsg>,
     ) -> ProtocolStepResult {
@@ -95,12 +118,14 @@ impl Protocol for MultiReplicaV2Protocol {
 
         let mut encode_time = Duration::ZERO;
         let mut decode_time = Duration::ZERO;
+        let mut false_matches = 0usize;
 
         let state = self.state.entry(replica_id).or_default();
 
         for (from, msg, hint) in inbox {
             match msg {
                 ProtocolMsg::RibltSketch { .. } => {
+                    // Chord path: pure RIBLT decode.
                     let remote_digests = match hint {
                         SimulatorHint::RibltDigests { digests } => digests,
                         _ => panic!("expected RibltDigests hint"),
@@ -116,50 +141,82 @@ impl Protocol for MultiReplicaV2Protocol {
                     encode_time += local_riblt.t_enc();
                     decode_time += local_riblt.t_dec();
 
-                    // local_only: digests we have that the sender doesn't.
                     let local_only: HashSet<u64> =
                         local_riblt.get_local_only_symbols().into_iter().collect();
-
-                    // Neighbours of `from` — used for gossip suppression.
-                    let from_neighbors = topology.neighbors(from);
-
-                    // Build to_send with gossip suppression:
-                    // Skip elements that were received from a node that is
-                    // also `from`'s neighbour, since `from` likely received
-                    // them from that shared neighbour already.
                     let to_send: Vec<Element> = local
                         .set
                         .iter()
-                        .filter(|e| {
-                            if !local_only.contains(&e.digest) {
-                                return false;
-                            }
-                            // Gossip suppression check.
-                            if let Some(sources) = state.received_from.get(&e.digest) {
-                                if sources.iter().any(|&src| from_neighbors.contains(&src)) {
-                                    return false;
-                                }
-                            }
-                            true
-                        })
+                        .filter(|e| local_only.contains(&e.digest))
                         .cloned()
                         .collect();
-
                     if !to_send.is_empty() {
                         state.pending.entry(from).or_default().extend(to_send);
                     }
                 }
+
+                ProtocolMsg::RatelessBloom { .. } => {
+                    // Star/Tree path: RatelessBF + RIBLT hybrid decode.
+                    let (sender_digests, bloom_bits) = match hint {
+                        SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
+                            (digests, bloom_bits)
+                        }
+                        _ => panic!("expected RatelessBloomDigests hint"),
+                    };
+
+                    let mut sender_filter = RatelessBF::new(sender_digests.clone(), bloom_bits);
+                    let effective_m_ratio =
+                        bloom_bits as f64 / sender_digests.len().max(1) as f64;
+
+                    let stopping_strategy = ExpectedCostFactory::new(effective_m_ratio)
+                        .create(local_digests.clone(), sender_digests.len());
+
+                    let (common, definitely_missing) =
+                        sender_filter.extend_until(stopping_strategy);
+
+                    let bloom_meta = sender_filter.size_of() as u64;
+                    network.record_decoded_metadata(replica_id, bloom_meta);
+                    encode_time += sender_filter.t_enc();
+                    decode_time += sender_filter.t_dec();
+
+                    // definitely_missing: our digests the sender definitely doesn't have.
+                    let mut recovered_local_only: Vec<u64> = definitely_missing;
+
+                    // Resolve the ambiguous subset via RIBLT.
+                    if !common.is_empty() {
+                        let mut sender_riblt = RatelessIBLT::riblt_from(sender_digests);
+                        let mut common_riblt = RatelessIBLT::riblt_from(common);
+
+                        let sketch_len = sender_riblt.find_all_differences(&mut common_riblt);
+                        let riblt_meta = (sketch_len * mem::size_of::<u64>()) as u64;
+                        network.record_decoded_metadata(replica_id, riblt_meta);
+
+                        encode_time += sender_riblt.t_enc();
+                        decode_time += sender_riblt.t_dec();
+
+                        let riblt_local_only = sender_riblt.get_remote_only_symbols();
+                        false_matches += riblt_local_only.len();
+                        recovered_local_only.extend(riblt_local_only);
+                    }
+
+                    let local_only_set: HashSet<u64> =
+                        recovered_local_only.into_iter().collect();
+                    let to_send: Vec<Element> = local
+                        .set
+                        .iter()
+                        .filter(|e| local_only_set.contains(&e.digest))
+                        .cloned()
+                        .collect();
+                    if !to_send.is_empty() {
+                        state.pending.entry(from).or_default().extend(to_send);
+                    }
+                }
+
                 ProtocolMsg::Elements(els) => {
                     for element in els {
-                        // Track which neighbour sent us this element.
-                        state
-                            .received_from
-                            .entry(element.digest)
-                            .or_default()
-                            .push(from);
                         next_set.insert(element);
                     }
                 }
+
                 _ => {}
             }
         }
@@ -169,7 +226,7 @@ impl Protocol for MultiReplicaV2Protocol {
             metrics: LocalMetrics {
                 encode_time,
                 decode_time,
-                false_matches: 0,
+                false_matches,
             },
         }
     }
@@ -234,26 +291,24 @@ mod tests {
         let topology = Topology::star(2);
         let mut replicas = vec![make_replica(0, &[1, 2, 3]), make_replica(1, &[2, 3, 4])];
         run_protocol(&mut protocol, &mut replicas, &topology, 4);
-
         let union: HashSet<u64> = replicas[0].set.iter().map(|e| e.digest).collect();
-        assert!(union.contains(&1));
-        assert!(union.contains(&4));
+        assert!(union.contains(&1) && union.contains(&4));
         let union1: HashSet<u64> = replicas[1].set.iter().map(|e| e.digest).collect();
         assert_eq!(union, union1);
     }
 
     #[test]
-    fn converges_on_three_node_star() {
+    fn converges_on_chord() {
         let mut protocol = MultiReplicaV2Protocol::new();
-        let topology = Topology::star(3);
+        let topology = Topology::chord(4);
         let mut replicas = vec![
-            make_replica(0, &[1, 2]),
-            make_replica(1, &[2, 3]),
-            make_replica(2, &[3, 4]),
+            make_replica(0, &[1, 5]),
+            make_replica(1, &[2, 6]),
+            make_replica(2, &[3, 7]),
+            make_replica(3, &[4, 8]),
         ];
-        run_protocol(&mut protocol, &mut replicas, &topology, 6);
-
-        let expected: HashSet<u64> = [1, 2, 3, 4].into_iter().collect();
+        run_protocol(&mut protocol, &mut replicas, &topology, 8);
+        let expected: HashSet<u64> = (1..=8).collect();
         for r in &replicas {
             let got: HashSet<u64> = r.set.iter().map(|e| e.digest).collect();
             assert_eq!(got, expected);
