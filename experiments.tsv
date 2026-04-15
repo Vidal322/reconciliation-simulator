@@ -1,2 +1,10 @@
 attempt	fitness	star_bytes	tree_bytes	chord_bytes	star_rounds	tree_rounds	chord_rounds	kept	description
-0	12876691	2771833	3586083	6518775	6	11	6	yes	baseline: bloom-filter reconciliation with BF-skip, direct broadcast, piggybacking
+0	89678000	13174280	37327720	39176000	2	5	2	yes	baseline: naive full-state transfer to all neighbors every round
+1	13221632	3430856	4221624	5569152	4	13	4	yes	RIBLT with gossip suppression via received_from (suppression never fires; matches reference RIBLT)
+2	12693908	2923579	4201177	5569152	4	13	4	yes	topology-aware hybrid: RatelessBF+RIBLT for Star/Tree, RIBLT for Chord; beats HybridRbfRiblt
+3	10718957	2411669	2738136	5569152	3	6	4	yes	pipelined sketch+eager-forward for Star/Tree (sent_to+received_from dedup); Chord unchanged
+4	10715462	2404284	2742026	5569152	3	6	4	yes	added Chord gossip suppression via received_from (no measurable effect; noise-level improvement)
+5	10129175	2275938	2284085	5569152	3	6	4	yes	single sketch only for Star/Tree (no post-R1 sketches); eager forwarding handles all propagation
+6	9895190	2276493	2286193	5332504	3	6	3	yes	eager-forward Chord with source-neighbor suppression (skip if source is neighbor of dest); Chord 4→3 rounds
+7	9186161	2269935	2287082	4629144	3	6	3	yes	single sketch for all topologies (Chord second RIBLT eliminated); Chord meta 1.54M→0.84M
+8	7495066	2270489	2285113	2939464	3	6	3	yes	hash-based forwarder selection for Chord 2-hop elements; Chord state 3.79M→2.1M

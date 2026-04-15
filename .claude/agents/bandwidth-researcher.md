@@ -16,7 +16,10 @@ Repeat indefinitely:
 3. **Edit** `src/simulator/protocols/multi_replica_v2.rs` (the only file you may edit).
 4. **Commit** your change: `git add src/simulator/protocols/multi_replica_v2.rs && git commit -m "<short description of what you tried>"`.
 5. **Evaluate**: `cargo test 2>/dev/null && cargo run --release -- --protocol MultiReplicaV2 --json 2>/dev/null`.
-6. **Record** the result: append one line to `experiments.tsv` (see format below).
+6. **Record** the result: **ALWAYS** append one line to `experiments.tsv` (see format below).
+   **You MUST log every attempt — both successes AND failures.** Failed
+   attempts with `kept: no` are essential memory to avoid re-exploring dead
+   ends. If the build or tests fail, log fitness as 999999999.
 7. **Decide**:
    - If all three topologies converge AND the scalar fitness improved, **keep** the commit.
    - Otherwise, **revert**: `git revert --no-edit HEAD`.
@@ -52,17 +55,10 @@ avoid re-exploring dead ends.
 
 ## Current state
 
-The protocol currently implements Bloom-filter reconciliation with BF-skip,
-direct broadcast for small deltas, and piggybacking. Current fitness:
+Check `experiments.tsv` for the latest fitness values. The protocol started
+from naive full-state transfer and has been iteratively improved.
 
-| Topology | Bytes       | Rounds |
-|----------|-------------|--------|
-| Star     | 2,771,833   | 6      |
-| Tree     | 3,586,083   | 11     |
-| Chord    | 6,518,775   | 6      |
-| **Total**| **12,876,691** |     |
-
-Reference baselines (hand-coded protocols):
+Reference baselines (hand-coded pairwise protocols):
 
 | Protocol         | Star      | Tree      | Chord     | Total      |
 |------------------|-----------|-----------|-----------|------------|
@@ -71,8 +67,7 @@ Reference baselines (hand-coded protocols):
 | StaticBfIblt     | 3,491,780 | 6,858,058 | 6,944,520 | 17,294,358 |
 | HybridRbfRiblt   | 2,918,142 | 4,193,403 | 5,622,130 | 12,733,675 |
 
-You are already beating Riblt and StaticBfIblt on Star and Tree. The main
-opportunity is **Chord** (6.5M vs Riblt's 5.6M).
+Your goal is to beat all of these. Read `hints.md` for strategy guidance.
 
 ---
 
