@@ -90,10 +90,13 @@ impl Protocol for MultiReplicaV2Protocol {
         }
 
         // ── 2. Eager-forward recently gained elements to ALL neighbours. ──
+        //    Only for Star/Tree: Chord's dense connectivity causes too many
+        //    redundant sends when forwarding (multiple neighbours all see the
+        //    same element and all forward it simultaneously).
         //    Skip: elements we already sent to that neighbour (sent_to),
         //          elements we received FROM that neighbour (received_from).
         let recent = mem::take(&mut state.recently_gained);
-        if !recent.is_empty() {
+        if !recent.is_empty() && topology.kind != TopologyKind::Chord {
             for &neighbor_id in &neighbors {
                 let sent = state.sent_to.entry(neighbor_id).or_default();
                 let recvd = state.received_from.entry(neighbor_id).or_default();
