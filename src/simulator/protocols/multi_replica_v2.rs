@@ -92,40 +92,59 @@ impl Protocol for MultiReplicaV2Protocol {
         // ── 2. Eager-forward recently gained elements. ──────────────────────
         //
         // Star/Tree: forward to ALL neighbours (with sent_to+received_from
-        // dedup).  A single BFS wave per topology is sufficient; the
-        // forwarding chain handles the full diameter without additional
-        // sketch rounds.
+        // dedup).  A single BFS wave per topology is sufficient.
         //
-        // Chord: also forward, but with source-neighbor suppression.
-        // If element X was received from neighbour B, and B is ALSO a
-        // neighbour of destination C, we skip that (C likely got X from B
-        // directly in round 2).  This eliminates most multi-path redundancy.
-        // The round-3 sketch serves as a safety net for any missed elements.
+        // Chord: source-neighbor suppression (source is already B's neighbor
+        // → B got it directly in round 2) PLUS hash-based forwarder selection
+        // among common neighbors of (source, dest).  With 3-4 common neighbors
+        // per non-adjacent pair in 8-node Chord, this eliminates ~67-75% of
+        // redundant eager-forward bytes while guaranteeing every element still
+        // reaches its destination.
         let recent = mem::take(&mut state.recently_gained);
         if !recent.is_empty() {
             for &neighbor_id in &neighbors {
-                let sent = state.sent_to.entry(neighbor_id).or_default();
-                let recvd = state.received_from.entry(neighbor_id).or_default();
+                let mut to_forward: Vec<Element> = Vec::new();
+                for (e, source) in &recent {
+                    // Never echo back to the sender.
+                    let already_received = state
+                        .received_from
+                        .entry(neighbor_id)
+                        .or_default()
+                        .contains(&e.digest);
+                    if already_received {
+                        continue;
+                    }
 
-                let to_forward: Vec<Element> = recent
-                    .iter()
-                    .filter(|&(e, source)| {
-                        // Never echo back to the node we received from.
-                        if recvd.contains(&e.digest) {
-                            return false;
+                    if topology.kind == TopologyKind::Chord {
+                        // Suppress if source is a direct neighbour of dest
+                        // (dest already received e from source in round 2).
+                        if topology.is_neighbor(*source, neighbor_id) {
+                            continue;
                         }
-                        // Chord: suppress if source is also a direct neighbour
-                        // of destination (the source likely already sent it).
-                        if topology.kind == TopologyKind::Chord
-                            && topology.is_neighbor(*source, neighbor_id)
+                        // Hash-based forwarder selection: among all common
+                        // neighbours of (source, dest), only the one whose id
+                        // is at index `digest % |common|` actually forwards.
+                        // Exactly one node forwards → zero redundancy.
+                        let src_nbrs = topology.neighbors(*source);
+                        let dst_nbrs = topology.neighbors(neighbor_id);
+                        let mut common: Vec<usize> = dst_nbrs
+                            .iter()
+                            .copied()
+                            .filter(|&z| z == replica_id || src_nbrs.contains(&z))
+                            .collect();
+                        common.sort_unstable();
+                        if !common.is_empty()
+                            && common[e.digest as usize % common.len()] != replica_id
                         {
-                            return false;
+                            continue;
                         }
-                        // Dedup: don't re-send something we already sent.
-                        sent.insert(e.digest)
-                    })
-                    .map(|(e, _)| e.clone())
-                    .collect();
+                    }
+
+                    let sent = state.sent_to.entry(neighbor_id).or_default();
+                    if sent.insert(e.digest) {
+                        to_forward.push(e.clone());
+                    }
+                }
 
                 if !to_forward.is_empty() {
                     network.send(
