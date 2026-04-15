@@ -117,9 +117,17 @@ impl Protocol for MultiReplicaV2Protocol {
 
                     if topology.kind == TopologyKind::Chord {
                         // Suppress if source is a direct neighbour of dest
-                        // (dest already received e from source in round 2).
+                        // AND they exchanged RIBLT (not an antipodal pair).
+                        // Antipodal pairs skip the sketch, so dest did NOT
+                        // receive source's elements in round 2 via RIBLT.
                         if topology.is_neighbor(*source, neighbor_id) {
-                            continue;
+                            let n = topology.num_nodes;
+                            let d = (*source as isize - neighbor_id as isize).abs() as usize;
+                            let circ = d.min(n.saturating_sub(d));
+                            if circ != n / 2 {
+                                continue; // non-antipodal neighbor: already sketched
+                            }
+                            // Fall through: antipodal pair skipped sketch, need forwarding
                         }
                         // Hash-based forwarder selection: among all common
                         // neighbours of (source, dest), only the one whose id
@@ -170,7 +178,16 @@ impl Protocol for MultiReplicaV2Protocol {
 
             match topology.kind {
                 TopologyKind::Chord => {
+                    let n = topology.num_nodes;
                     for &neighbor_id in &neighbors {
+                        // Skip sketch to the antipodal neighbour (distance n/2).
+                        // Elements for that pair propagate via common neighbours
+                        // using the hash-based eager-forward in step 2.
+                        let d = (neighbor_id as isize - replica_id as isize).abs() as usize;
+                        let circ = d.min(n.saturating_sub(d));
+                        if circ == n / 2 {
+                            continue;
+                        }
                         network.send(
                             replica_id,
                             neighbor_id,
