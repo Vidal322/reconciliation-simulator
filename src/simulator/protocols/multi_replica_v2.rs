@@ -142,11 +142,8 @@ impl Protocol for MultiReplicaV2Protocol {
         //    Star/Tree: only one sketch per replica (first_sketch_sent flag).
         //    Chord: repeat whenever the set has grown (ongoing RIBLT rounds).
         let current_size = local.set.len();
-        let need_sketch = if topology.kind == TopologyKind::Chord {
-            current_size != state.sketch_set_size
-        } else {
-            !state.first_sketch_sent
-        };
+        let need_sketch = !state.first_sketch_sent;
+        let _ = current_size;
         if need_sketch {
             state.sketch_set_size = current_size;
             state.first_sketch_sent = true;
