@@ -5,6 +5,11 @@ improve the multi-replica set reconciliation protocol in
 `src/simulator/protocols/multi_replica_v2.rs` to minimise total bandwidth
 while maintaining convergence. **Never stop experimenting.**
 
+**Workload**: 32 replicas, `set_size=10_000`, `jaccard_similarity=0.5`,
+`universe_size=200_000`, `pattern=Uniform`, `round_cap=100`, `seed=42`.
+All fitness numbers below are measured in this configuration — they are
+not comparable with runs at a different scale.
+
 ---
 
 ## Loop
@@ -52,27 +57,30 @@ avoid re-exploring dead ends.
 
 ## Current state
 
-The protocol currently implements Bloom-filter reconciliation with BF-skip,
-direct broadcast for small deltas, and piggybacking. Current fitness:
+`multi_replica_v2.rs` currently contains the full-state-transfer scaffold
+(the bloom-filter variant from the previous scale was reset on the new
+workload). Current fitness:
 
-| Topology | Bytes       | Rounds |
-|----------|-------------|--------|
-| Star     | 2,771,833   | 6      |
-| Tree     | 3,586,083   | 11     |
-| Chord    | 6,518,775   | 6      |
-| **Total**| **12,876,691** |     |
+| Topology | Bytes           | Rounds |
+|----------|-----------------|--------|
+| Star     | 122,800,560     | 2      |
+| Tree     | 887,229,040     | 9      |
+| Chord    | 1,184,879,520   | 3      |
+| **Total**| **2,194,909,120** |      |
 
 Reference baselines (hand-coded protocols):
 
-| Protocol         | Star      | Tree      | Chord     | Total      |
-|------------------|-----------|-----------|-----------|------------|
-| FullStateTransfer| 13,174,280| 37,327,720| 39,176,000| 89,678,000 |
-| Riblt            | 3,430,856 | 4,221,624 | 5,569,152 | 13,221,632 |
-| StaticBfIblt     | 3,491,780 | 6,858,058 | 6,944,520 | 17,294,358 |
-| HybridRbfRiblt   | 2,918,142 | 4,193,403 | 5,622,130 | 12,733,675 |
+| Protocol         | Star        | Tree        | Chord         | Total         |
+|------------------|-------------|-------------|---------------|---------------|
+| FullStateTransfer| 122,800,560 | 887,229,040 | 1,184,879,520 | 2,194,909,120 |
+| Riblt            | 130,852,288 | 174,512,760 |   300,609,216 |   605,974,264 |
+| StaticBfIblt     | 101,813,856 | 245,014,744 |   319,377,032 |   666,205,632 |
+| HybridRbfRiblt   |  96,188,012 | 157,669,396 |   283,306,230 |   537,163,638 |
 
-You are already beating Riblt and StaticBfIblt on Star and Tree. The main
-opportunity is **Chord** (6.5M vs Riblt's 5.6M).
+`MultiReplicaV2` starts at full-state-transfer levels. Your job is to beat
+the sketch-based baselines (Riblt, HybridRbfRiblt) across all three
+topologies — the Tree case is where full-state-transfer is weakest and
+the opportunity is largest (~5× gap vs HybridRbfRiblt).
 
 ---
 
