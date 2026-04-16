@@ -21,7 +21,7 @@ pub struct WorkloadConfig {
     pub set_size: usize,
     pub payload_size: usize,
     pub digest_bits: usize,
-    pub divergence: f64,
+    pub jaccard_similarity: f64,
     pub pattern: DivergencePattern,
     pub seed: u64,
 
@@ -38,11 +38,11 @@ pub struct WorkloadConfig {
 
     /// Only used for clustered workloads.
     /// Expected divergence between replicas in different clusters.
-    pub inter_cluster_divergence: Option<f64>,
+    pub jaccard_inter: Option<f64>,
 
     /// Only used for clustered workloads.
     /// Expected divergence between replicas in the same cluster.
-    pub intra_cluster_divergence: Option<f64>,
+    pub jaccard_intra: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -84,8 +84,8 @@ fn validate_config(config: &WorkloadConfig) {
         "digest_bits must be in 1..=64"
     );
     assert!(
-        (0.0..=1.0).contains(&config.divergence),
-        "divergence must be in [0, 1]"
+        (0.0..=1.0).contains(&config.jaccard_similarity),
+        "jaccard_similarity must be in [0, 1]"
     );
     assert!(
         config.universe_size >= config.set_size,
@@ -98,11 +98,11 @@ fn validate_config(config: &WorkloadConfig) {
             .cluster_count
             .expect("cluster_count is required for clustered");
         let inter = config
-            .inter_cluster_divergence
-            .expect("inter_cluster_divergence is required for clustered");
+            .jaccard_inter
+            .expect("jaccard_inter is required for clustered");
         let intra = config
-            .intra_cluster_divergence
-            .expect("intra_cluster_divergence is required for clustered");
+            .jaccard_intra
+            .expect("jaccard_intra is required for clustered");
 
         assert!(cluster_count > 0, "cluster_count must be > 0");
         assert!(
@@ -111,16 +111,13 @@ fn validate_config(config: &WorkloadConfig) {
         );
         assert!(
             (0.0..=1.0).contains(&intra),
-            "intra_cluster_divergence must be in [0, 1]"
+            "jaccard_intra must be in [0, 1]"
         );
         assert!(
             (0.0..=1.0).contains(&inter),
-            "inter_cluster_divergence must be in [0, 1]"
+            "jaccard_inter must be in [0, 1]"
         );
-        assert!(
-            intra <= inter,
-            "intra_cluster_divergence should be <= inter_cluster_divergence"
-        );
+        assert!(intra <= inter, "jaccard_intra should be <= jaccard_inter");
     }
 }
 
@@ -176,7 +173,7 @@ fn generate_uniform(
     zipf: &WeightedIndex<f64>,
     rng: &mut StdRng,
 ) -> Vec<HashSet<Element>> {
-    let common_size = ((1.0 - config.divergence) * config.set_size as f64)
+    let common_size = ((1.0 - config.jaccard_similarity) * config.set_size as f64)
         .round()
         .clamp(0.0, config.set_size as f64) as usize;
     let unique_size = config.set_size - common_size;
@@ -202,8 +199,8 @@ fn generate_clustered(
     rng: &mut StdRng,
 ) -> Vec<HashSet<Element>> {
     let cluster_count = config.cluster_count.unwrap();
-    let inter = config.inter_cluster_divergence.unwrap();
-    let intra = config.intra_cluster_divergence.unwrap();
+    let inter = config.jaccard_inter.unwrap();
+    let intra = config.jaccard_intra.unwrap();
 
     let global_common_size = ((1.0 - inter) * config.set_size as f64)
         .round()

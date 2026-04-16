@@ -1,3 +1,4 @@
+#![allow(unused)]
 mod simulator;
 
 use simulator::engine::{Simulation, SimulationConfig, SimulationResult};
@@ -15,7 +16,9 @@ fn parse_protocol(name: &str) -> ProtocolKind {
         "MultiReplicaV2" => ProtocolKind::MultiReplicaV2,
         _ => {
             eprintln!("Unknown protocol: {name}");
-            eprintln!("Available: FullStateTransfer, Riblt, StaticBfIblt, HybridRbfRiblt, MultiReplicaV2");
+            eprintln!(
+                "Available: FullStateTransfer, Riblt, StaticBfIblt, HybridRbfRiblt, MultiReplicaV2"
+            );
             std::process::exit(1);
         }
     }
@@ -51,7 +54,10 @@ fn parse_args() -> CliArgs {
         }
         i += 1;
     }
-    CliArgs { protocol_filter, json }
+    CliArgs {
+        protocol_filter,
+        json,
+    }
 }
 
 fn print_json(results: &[(SimulationResult, usize)]) {
@@ -67,8 +73,14 @@ fn print_json(results: &[(SimulationResult, usize)]) {
         println!("      \"converged\": {},", result.converged);
         println!("      \"rounds\": {},", result.rounds);
         println!("      \"total_bytes_sent\": {},", total_sent);
-        println!("      \"total_state_bytes_sent\": {},", result.metrics.total_state_bytes_sent);
-        println!("      \"total_metadata_bytes_sent\": {},", result.metrics.total_metadata_bytes_sent);
+        println!(
+            "      \"total_state_bytes_sent\": {},",
+            result.metrics.total_state_bytes_sent
+        );
+        println!(
+            "      \"total_metadata_bytes_sent\": {},",
+            result.metrics.total_metadata_bytes_sent
+        );
         println!("      \"target_union_size\": {}", target_union_size);
         println!("    }}{comma}");
     }
@@ -119,8 +131,8 @@ fn print_human(result: &SimulationResult, simulation: &Simulation) {
 
     let total_sent =
         result.metrics.total_state_bytes_sent + result.metrics.total_metadata_bytes_sent;
-    let total_received = result.metrics.total_state_bytes_received
-        + result.metrics.total_metadata_bytes_received;
+    let total_received =
+        result.metrics.total_state_bytes_received + result.metrics.total_metadata_bytes_received;
 
     println!("Total bytes sent:       {}", total_sent);
     println!("Total bytes received:   {}", total_received);
@@ -201,14 +213,14 @@ fn main() {
                 set_size: 10_000,
                 payload_size: 32,
                 digest_bits: 64,
-                divergence: 0.1,
+                jaccard_similarity: 0.818,
                 pattern: DivergencePattern::Uniform,
                 seed: 42,
                 universe_size: 100_000,
                 zipf_exponent: 1.0,
                 cluster_count: None,
-                inter_cluster_divergence: None,
-                intra_cluster_divergence: None,
+                jaccard_inter: None,
+                jaccard_intra: None,
             };
 
             let config = SimulationConfig {
