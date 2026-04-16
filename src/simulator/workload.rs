@@ -117,7 +117,10 @@ fn validate_config(config: &WorkloadConfig) {
             (0.0..=1.0).contains(&inter),
             "jaccard_inter must be in [0, 1]"
         );
-        assert!(intra <= inter, "jaccard_intra should be <= jaccard_inter");
+        assert!(
+            intra >= inter,
+            "jaccard_intra must be >= jaccard_inter (same-cluster pairs are more similar)"
+        );
     }
 }
 
@@ -167,15 +170,17 @@ fn build_zipf_sampler(universe_size: usize, exponent: f64) -> WeightedIndex<f64>
     WeightedIndex::new(weights).expect("failed to build zipf sampler")
 }
 
+pub fn jaccard_to_common_size(j: f64, set_size: usize) -> usize {
+    (2.0 * set_size as f64 * j / (1.0 + j)).round() as usize
+}
+
 fn generate_uniform(
     config: &WorkloadConfig,
     universe: &[Element],
     zipf: &WeightedIndex<f64>,
     rng: &mut StdRng,
 ) -> Vec<HashSet<Element>> {
-    let common_size = ((1.0 - config.jaccard_similarity) * config.set_size as f64)
-        .round()
-        .clamp(0.0, config.set_size as f64) as usize;
+    let common_size = jaccard_to_common_size(config.jaccard_similarity, config.set_size);
     let unique_size = config.set_size - common_size;
 
     let common_set = sample_unique_zipf(universe, zipf, common_size, None, rng);
@@ -202,13 +207,9 @@ fn generate_clustered(
     let inter = config.jaccard_inter.unwrap();
     let intra = config.jaccard_intra.unwrap();
 
-    let global_common_size = ((1.0 - inter) * config.set_size as f64)
-        .round()
-        .clamp(0.0, config.set_size as f64) as usize;
-
-    let cluster_shared_size = ((inter - intra).max(0.0) * config.set_size as f64)
-        .round()
-        .clamp(0.0, config.set_size as f64) as usize;
+    let global_common_size = jaccard_to_common_size(inter, config.set_size);
+    let total_intra = jaccard_to_common_size(intra, config.set_size);
+    let cluster_shared_size = total_intra.saturating_sub(global_common_size);
 
     let used = global_common_size + cluster_shared_size;
     let replica_unique_size = config.set_size.saturating_sub(used);
