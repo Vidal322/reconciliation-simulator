@@ -60,10 +60,10 @@ fn parse_args() -> CliArgs {
     }
 }
 
-fn print_json(results: &[(SimulationResult, usize)]) {
+fn print_json(results: &[(SimulationResult, usize, f64)]) {
     println!("{{");
     println!("  \"runs\": [");
-    for (i, (result, target_union_size)) in results.iter().enumerate() {
+    for (i, (result, target_union_size, jaccard_similarity)) in results.iter().enumerate() {
         let total_sent =
             result.metrics.total_state_bytes_sent + result.metrics.total_metadata_bytes_sent;
         let comma = if i + 1 < results.len() { "," } else { "" };
@@ -82,6 +82,7 @@ fn print_json(results: &[(SimulationResult, usize)]) {
             result.metrics.total_metadata_bytes_sent
         );
         println!("      \"target_union_size\": {}", target_union_size);
+        println!("      \"jaccard_similarity\": {}", jaccard_similarity);
         println!("    }}{comma}");
     }
     println!("  ]");
@@ -204,7 +205,7 @@ fn main() {
 
     let topologies = [TopologyKind::Star, TopologyKind::Tree, TopologyKind::Chord];
 
-    let mut json_results: Vec<(SimulationResult, usize)> = Vec::new();
+    let mut json_results: Vec<(SimulationResult, usize, f64)> = Vec::new();
 
     for protocol in &protocols {
         for topology in topologies {
@@ -238,7 +239,11 @@ fn main() {
             append_run_summary_csv("results.csv", &row).expect("failed to write CSV");
 
             if cli.json {
-                json_results.push((result, simulation.target_union().len()));
+                json_results.push((
+                    result,
+                    simulation.target_union().len(),
+                    config.workload.jaccard_similarity,
+                ));
             } else {
                 print_human(&result, &simulation);
             }
