@@ -210,14 +210,14 @@ fn main() {
     for protocol in &protocols {
         for topology in topologies {
             let workload = WorkloadConfig {
-                num_replicas: 8,
+                num_replicas: 32,
                 set_size: 10_000,
                 payload_size: 32,
                 digest_bits: 64,
-                jaccard_similarity: 0.818,
+                jaccard_similarity: 0.5,
                 pattern: DivergencePattern::Uniform,
                 seed: 42,
-                universe_size: 100_000,
+                universe_size: 200_000,
                 zipf_exponent: 1.0,
                 cluster_count: None,
                 jaccard_inter: None,
@@ -225,7 +225,7 @@ fn main() {
             };
 
             let config = SimulationConfig {
-                round_cap: 20,
+                round_cap: 100,
                 seed: 42,
                 topology,
                 protocol: *protocol,
