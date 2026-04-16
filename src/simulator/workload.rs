@@ -355,4 +355,54 @@ mod tests {
         assert!(counts[4999] > 0);
         assert!(counts[9999] > 0);
     }
+
+    #[test]
+    fn jaccard_to_common_size_round_trips() {
+        let set_size = 10_000;
+        for &j in &[0.1, 0.5, 0.818, 0.9, 0.99] {
+            let c = jaccard_to_common_size(j, set_size);
+            let j_recovered = c as f64 / (2 * set_size - c) as f64;
+            let error = (j_recovered - j).abs();
+            assert!(
+                error < 0.001,
+                "J={j}: expected ~{j}, got {j_recovered} (error {error})"
+            );
+        }
+    }
+    #[test]
+    fn uniform_pairwise_jaccard_matches_config() {
+        let config = WorkloadConfig {
+            num_replicas: 4,
+            set_size: 10_000,
+            payload_size: 4,
+            digest_bits: 64,
+            jaccard_similarity: 0.8,
+            pattern: DivergencePattern::Uniform,
+            seed: 42,
+            universe_size: 50_000,
+            zipf_exponent: 1.0,
+            cluster_count: None,
+            jaccard_inter: None,
+            jaccard_intra: None,
+        };
+
+        let workload = Workload::generate(&config);
+        let sets = &workload.replica_sets;
+
+        // Check every pair
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                let intersection = sets[i].intersection(&sets[j]).count();
+                let union = sets[i].union(&sets[j]).count();
+                let actual_j = intersection as f64 / union as f64;
+                let error = (actual_j - config.jaccard_similarity).abs();
+                assert!(
+                    error < 0.05,
+                    "pair ({i},{j}): expected J≈{}, got {actual_j:.3} (error      
+  {error:.3})",
+                    config.jaccard_similarity
+                );
+            }
+        }
+    }
 }
