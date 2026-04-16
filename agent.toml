@@ -1,0 +1,15 @@
+protocol = "MultiReplicaV2"
+topologies = ["Star", "Tree", "Chord"]
+seed = 42
+round_cap = 100
+
+[workload]
+num_replicas = 8
+set_size = 10_000
+payload_size = 32
+digest_bits = 64
+jaccard_similarity = 0.5
+pattern = "Uniform"
+universe_size = 200_000
+zipf_exponent = 1.0
+seed = 42
