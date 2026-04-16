@@ -1,5 +1,5 @@
 #![allow(unused)]
-mod simulator;
+use reconciliation_simulator::simulator;
 
 use simulator::engine::{Simulation, SimulationConfig, SimulationResult};
 use simulator::export::{RunSummaryRow, append_run_summary_csv};
