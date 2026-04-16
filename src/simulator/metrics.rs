@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::simulator::replica::Replica;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NodeMetrics {
     pub replica_id: usize,
     pub state_bytes_sent: usize,
@@ -15,7 +17,7 @@ pub struct NodeMetrics {
     pub elements_added: usize,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct MetricsSnapshot {
     pub rounds: usize,
     pub total_state_bytes_sent: usize,

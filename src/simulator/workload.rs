@@ -4,18 +4,19 @@ use std::hash::{Hash, Hasher};
 use rand::SeedableRng;
 use rand::distr::{Distribution, weighted::WeightedIndex};
 use rand::rngs::StdRng;
+use serde::{Deserialize, Serialize};
 
 use crate::simulator::replica::Element;
 
 const PAYLOAD_PADDING: &'static str = "payloadPadding";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DivergencePattern {
     Uniform,
     Clustered,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkloadConfig {
     pub num_replicas: usize,
     pub set_size: usize,

@@ -9,12 +9,14 @@ use std::collections::HashSet;
 use std::fmt;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::simulator::network::{RecvView, SendView};
 use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProtocolKind {
     FullStateTransfer,
     HybridRbfRiblt,

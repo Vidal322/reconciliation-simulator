@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::simulator::metrics::{MetricsCollector, MetricsSnapshot};
 
 use crate::simulator::protocols::bf_iblt::StaticBfIbltProtocol;
@@ -17,7 +19,7 @@ use crate::simulator::protocols::{LocalMetrics, Protocol};
 
 use std::collections::HashSet;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimulationConfig {
     pub round_cap: usize,
     pub seed: u64,
@@ -38,7 +40,7 @@ pub struct Simulation {
     current_round: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RunStatus {
     Converged,
     RoundCapReached,
@@ -51,7 +53,7 @@ pub enum RoundOutcome {
     RoundCapReached,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimulationResult {
     pub status: RunStatus,
     pub rounds: usize,
