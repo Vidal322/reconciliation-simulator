@@ -1,10 +1,10 @@
 protocol = "MultiReplicaV2"
 topologies = ["Star", "Tree", "Chord"]
-seed = 42
+seeds = [42,43,44]
 round_cap = 100
 
 [workload]
-num_replicas = 8
+num_replicas = 32
 set_size = 10_000
 payload_size = 32
 digest_bits = 64

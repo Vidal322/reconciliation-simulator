@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 struct EvalConfig {
     protocol: ProtocolKind,
     topologies: Vec<TopologyKind>,
-    seed: u64,
+    seeds: Vec<u64>,
     round_cap: usize,
     workload: WorkloadConfig,
 }
@@ -40,15 +40,16 @@ struct RunEntry {
 #[derive(Serialize)]
 struct TopologySummary {
     topology: TopologyKind,
-    bytes: usize,
-    rounds: usize,
-    converged: bool,
+    mean_bytes: f64,
+    std_bytes: f64,
+    mean_rounds: f64,
+    all_converged: bool,
 }
 
 #[derive(Serialize)]
 struct Summary {
     by_topology: Vec<TopologySummary>,
-    fitness: usize,
+    fitness: f64,
     all_converged: bool,
 }
 
@@ -68,42 +69,65 @@ fn main() {
     let mut runs = Vec::new();
 
     for &topo in &eval_config.topologies {
-        let sim_config = SimulationConfig {
-            round_cap: eval_config.round_cap,
-            seed: eval_config.seed,
-            topology: topo,
-            protocol: eval_config.protocol,
-            workload: eval_config.workload.clone(),
-        };
-        let mut sim = Simulation::new(sim_config);
-        let result = sim.run();
-        let total =
-            result.metrics.total_state_bytes_sent + result.metrics.total_metadata_bytes_sent;
+        for &seed in &eval_config.seeds {
+            let sim_config = SimulationConfig {
+                round_cap: eval_config.round_cap,
+                seed: seed,
+                topology: topo,
+                protocol: eval_config.protocol,
+                workload: eval_config.workload.clone(),
+            };
+            let mut sim = Simulation::new(sim_config);
+            let result = sim.run();
+            let total =
+                result.metrics.total_state_bytes_sent + result.metrics.total_metadata_bytes_sent;
 
-        runs.push(RunEntry {
-            topology: topo,
-            seed: eval_config.seed,
-            converged: result.converged,
-            rounds: result.rounds,
-            total_bytes_sent: total,
-            state_bytes_sent: result.metrics.total_state_bytes_sent,
-            metadata_bytes_sent: result.metrics.total_metadata_bytes_sent,
-        });
+            runs.push(RunEntry {
+                topology: topo,
+                seed: seed,
+                converged: result.converged,
+                rounds: result.rounds,
+                total_bytes_sent: total,
+                state_bytes_sent: result.metrics.total_state_bytes_sent,
+                metadata_bytes_sent: result.metrics.total_metadata_bytes_sent,
+            });
+        }
     }
 
     // Build summary
-    let by_topology: Vec<TopologySummary> = runs
+    let by_topology: Vec<TopologySummary> = eval_config
+        .topologies
         .iter()
-        .map(|r| TopologySummary {
-            topology: r.topology,
-            bytes: r.total_bytes_sent,
-            rounds: r.rounds,
-            converged: r.converged,
+        .map(|&topo| {
+            let topo_runs: Vec<&RunEntry> = runs.iter().filter(|r| r.topology == topo).collect();
+            let n = topo_runs.len() as f64;
+            let mean_bytes = topo_runs
+                .iter()
+                .map(|r| r.total_bytes_sent as f64)
+                .sum::<f64>()
+                / n;
+            let mean_rounds = topo_runs.iter().map(|r| r.rounds as f64).sum::<f64>() / n;
+            let variance = topo_runs
+                .iter()
+                .map(|r| {
+                    let diff = r.total_bytes_sent as f64 - mean_bytes;
+                    diff * diff
+                })
+                .sum::<f64>()
+                / n;
+            let std_bytes = variance.sqrt();
+            TopologySummary {
+                topology: topo,
+                mean_bytes,
+                std_bytes,
+                mean_rounds,
+                all_converged: topo_runs.iter().all(|r| r.converged),
+            }
         })
         .collect();
 
-    let fitness: usize = by_topology.iter().map(|t| t.bytes).sum();
-    let all_converged = by_topology.iter().all(|t| t.converged);
+    let fitness: f64 = by_topology.iter().map(|t| t.mean_bytes).sum();
+    let all_converged = by_topology.iter().all(|t| t.all_converged);
 
     let output = EvalOutput {
         runs,
