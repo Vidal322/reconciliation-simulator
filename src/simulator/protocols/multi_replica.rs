@@ -7,17 +7,17 @@ use crate::simulator::topology::Topology;
 /// Agent-target protocol. Initial implementation: full state transfer.
 /// The autoresearch agent will iteratively improve this file to reduce
 /// bandwidth while maintaining convergence.
-pub struct MultiReplicaV2Protocol;
+pub struct MultiReplicaProtocol;
 
-impl MultiReplicaV2Protocol {
+impl MultiReplicaProtocol {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Protocol for MultiReplicaV2Protocol {
+impl Protocol for MultiReplicaProtocol {
     fn kind(&self) -> ProtocolKind {
-        ProtocolKind::MultiReplicaV2
+        ProtocolKind::MultiReplica
     }
 
     fn send_phase(

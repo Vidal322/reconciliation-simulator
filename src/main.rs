@@ -13,11 +13,11 @@ fn parse_protocol(name: &str) -> ProtocolKind {
         "Riblt" => ProtocolKind::Riblt,
         "StaticBfIblt" => ProtocolKind::StaticBfIblt,
         "HybridRbfRiblt" => ProtocolKind::HybridRbfRiblt,
-        "MultiReplicaV2" => ProtocolKind::MultiReplicaV2,
+        "MultiReplica" => ProtocolKind::MultiReplica,
         _ => {
             eprintln!("Unknown protocol: {name}");
             eprintln!(
-                "Available: FullStateTransfer, Riblt, StaticBfIblt, HybridRbfRiblt, MultiReplicaV2"
+                "Available: FullStateTransfer, Riblt, StaticBfIblt, HybridRbfRiblt, MultiReplica"
             );
             std::process::exit(1);
         }
@@ -154,7 +154,7 @@ fn print_human(result: &SimulationResult, simulation: &Simulation) {
                 "Expected: metadata bytes lower than pure RIBLT in many cases, and some state bytes."
             );
         }
-        ProtocolKind::MultiReplicaV2 => {
+        ProtocolKind::MultiReplica => {
             println!("Agent-target protocol. Baseline: full state transfer.");
         }
     }
@@ -195,7 +195,7 @@ fn main() {
         ProtocolKind::Riblt,
         ProtocolKind::StaticBfIblt,
         ProtocolKind::HybridRbfRiblt,
-        ProtocolKind::MultiReplicaV2,
+        ProtocolKind::MultiReplica,
     ];
 
     let protocols: Vec<ProtocolKind> = match cli.protocol_filter {

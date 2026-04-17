@@ -2,7 +2,7 @@
 
 You are an autonomous research agent. Your single task is to iteratively
 improve the multi-replica set reconciliation protocol in
-`src/simulator/protocols/multi_replica_v2.rs` to minimise total bandwidth
+`src/simulator/protocols/multi_replica.rs` to minimise total bandwidth
 while maintaining convergence. **Never stop experimenting.**
 
 **Workload**: 32 replicas, `set_size=10_000`, `jaccard_similarity=0.5`,
@@ -16,10 +16,10 @@ configuration — they are not comparable with runs at a different scale.
 
 Repeat indefinitely:
 
-1. **Read** the current `multi_replica_v2.rs` and `experiments.tsv`.
+1. **Read** the current `multi_replica.rs` and `experiments.tsv`.
 2. **Hypothesise** a change that should reduce total bytes sent.
-3. **Edit** `src/simulator/protocols/multi_replica_v2.rs` (the only file you may edit).
-4. **Commit** your change: `git add src/simulator/protocols/multi_replica_v2.rs && git commit -m "<short description of what you tried>"`.
+3. **Edit** `src/simulator/protocols/multi_replica.rs` (the only file you may edit).
+4. **Commit** your change: `git add src/simulator/protocols/multi_replica.rs && git commit -m "<short description of what you tried>"`.
 5. **Evaluate**: `cargo test 2>/dev/null && cargo run --release --bin eval -- --config agent.toml 2>/dev/null > /tmp/result.json`.
 6. **Parse** the result: read `summary.fitness` and `summary.all_converged` from `/tmp/result.json`. Check `summary.by_topology[*].std_bytes` — if any topology's `std_bytes` exceeds the improvement, the change is noise, not signal.
 7. **Record** the result: append one line to `experiments.tsv` (see format below).
@@ -31,6 +31,7 @@ Repeat indefinitely:
 ---
 
 ## Scalar fitness
+
 
 ```
 fitness = mean_bytes(Star) + mean_bytes(Tree) + mean_bytes(Chord)
@@ -59,7 +60,7 @@ avoid re-exploring dead ends.
 
 ## Current state
 
-`multi_replica_v2.rs` currently contains the full-state-transfer scaffold
+`multi_replica.rs` currently contains the full-state-transfer scaffold
 (the bloom-filter variant from the previous scale was reset on the new
 workload). Current fitness:
 
@@ -79,7 +80,7 @@ Reference baselines (hand-coded protocols):
 | StaticBfIblt     | 101,813,856 | 245,014,744 |   319,377,032 |   666,205,632 |
 | HybridRbfRiblt   |  96,188,012 | 157,669,396 |   283,306,230 |   537,163,638 |
 
-`MultiReplicaV2` starts at full-state-transfer levels. Your job is to beat
+`MultiReplica` starts at full-state-transfer levels. Your job is to beat
 the sketch-based baselines (Riblt, HybridRbfRiblt) across all three
 topologies — the Tree case is where full-state-transfer is weakest and
 the opportunity is largest (~5× gap vs HybridRbfRiblt).
@@ -88,7 +89,7 @@ the opportunity is largest (~5× gap vs HybridRbfRiblt).
 
 ## Constraints
 
-1. **Only edit** `src/simulator/protocols/multi_replica_v2.rs`. No other files
+1. **Only edit** `src/simulator/protocols/multi_replica.rs`. No other files
    (except `experiments.tsv` for logging).
 2. Must implement the `Protocol` trait from `src/simulator/protocols/mod.rs`.
 3. Only use `SendView::send()` in `send_phase` and
@@ -98,7 +99,7 @@ the opportunity is largest (~5× gap vs HybridRbfRiblt).
    There is no free data channel.
 6. May use any algorithm in `src/simulator/algorithms/` (RIBLT sketches,
    Bloom filters, rateless Bloom filters).
-7. May add internal state to `MultiReplicaV2Protocol`.
+7. May add internal state to `MultiReplicaProtocol`.
 8. `cargo test` must pass after every edit.
 9. All three topologies must converge (`converged: true`).
 
@@ -133,6 +134,7 @@ invent new approaches.
 
 ### Topology-aware strategies
 - **Gossip suppression**: on high-degree topologies (Chord), a node that
+
   has already received elements from multiple neighbours can suppress
   redundant sends to neighbours that likely already have them.
 - **Hub awareness**: on Star topology, the hub sees all data first. If the
