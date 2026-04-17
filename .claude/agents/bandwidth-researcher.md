@@ -5,10 +5,12 @@ improve the multi-replica set reconciliation protocol in
 `src/simulator/protocols/multi_replica.rs` to minimise total bandwidth
 while maintaining convergence. **Never stop experimenting.**
 
-**Workload**: 32 replicas, `set_size=10_000`, `jaccard_similarity=0.5`,
-`universe_size=200_000`, `pattern=Uniform`, `round_cap=100`,
-`seeds=[42,43,44]`. All fitness numbers below are measured in this
-configuration — they are not comparable with runs at a different scale.
+**Workload**: 32 replicas, `set_size=10_000`, `universe_size=200_000`,
+`pattern=Uniform`, `round_cap=100`, `seeds=[42,43,44]`, swept across
+`jaccard_similarities=[0.25, 0.5, 0.75]`. Each `(topology, J)` pair is a
+"cell" in the evaluation matrix (3 × 3 = 9 cells total). All fitness
+numbers below are measured in this configuration — they are not
+comparable with runs at a different scale.
 
 ---
 
@@ -21,7 +23,7 @@ Repeat indefinitely:
 3. **Edit** `src/simulator/protocols/multi_replica.rs` (the only file you may edit).
 4. **Commit** your change: `git add src/simulator/protocols/multi_replica.rs && git commit -m "<short description of what you tried>"`.
 5. **Evaluate**: `cargo test 2>/dev/null && cargo run --release --bin eval -- --config agent.toml 2>/dev/null > /tmp/result.json`.
-6. **Parse** the result: read `summary.fitness` and `summary.all_converged` from `/tmp/result.json`. Check `summary.by_topology[*].std_bytes` — if any topology's `std_bytes` exceeds the improvement, the change is noise, not signal.
+6. **Parse** the result: read `summary.fitness` and `summary.all_converged` from `/tmp/result.json`. Check `summary.by_cell[*].std_bytes` — if any cell's `std_bytes` exceeds the improvement, the change is noise, not signal.
 7. **Record** the result: append one line to `experiments.tsv` (see format below).
 8. **Decide**:
    - If `all_converged` is true AND the scalar fitness improved, **keep** the commit.

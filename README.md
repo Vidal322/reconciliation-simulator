@@ -119,7 +119,8 @@ cargo run --release --bin eval -- --config agent.toml
 ```
 
 Emits one JSON document on stdout with per-run entries and a summary
-(`mean_bytes`, `std_bytes`, `mean_rounds` per topology; scalar `fitness`).
+(`mean_bytes`, `std_bytes`, `mean_rounds` per `(topology, jaccard_similarity)`
+cell; scalar `fitness` = sum of cell `mean_bytes`).
 
 ### Tests
 
