@@ -13,14 +13,16 @@ use crate::simulator::topology::{Topology, TopologyKind};
 
 /// Decode a single BF+RIBLT sketch message against `local_digests`.
 /// Bills decoded metadata bytes via `network`.
-/// Returns the list of local-only digests (elements receiver has, sender lacks).
+/// Returns (b_only, a_only):
+///   b_only = digests receiver has that sender lacks (local-only)
+///   a_only = digests sender has that receiver lacks (remote-only)
 fn decode_bf_sketch(
     replica_id: usize,
     sender_digests: Vec<u64>,
     bloom_bits: usize,
     local_digests: &[u64],
     network: &mut RecvView<ProtocolMsg>,
-) -> Vec<u64> {
+) -> (Vec<u64>, Vec<u64>) {
     let effective_m_ratio = bloom_bits as f64 / sender_digests.len().max(1) as f64;
     let mut sender_filter = RatelessBF::new(sender_digests.clone(), bloom_bits);
     let stopping_strategy = ExpectedCostFactory::new(effective_m_ratio)
@@ -28,7 +30,8 @@ fn decode_bf_sketch(
     let (common, definitely_missing) = sender_filter.extend_until(stopping_strategy);
     network.record_decoded_metadata(replica_id, sender_filter.size_of() as u64);
 
-    let mut local_only: Vec<u64> = definitely_missing;
+    let mut b_only: Vec<u64> = definitely_missing;
+    let mut a_only: Vec<u64> = Vec::new();
     if !common.is_empty() {
         let mut sender_riblt = RatelessIBLT::riblt_from(sender_digests);
         let mut common_riblt = RatelessIBLT::riblt_from(common);
@@ -37,26 +40,28 @@ fn decode_bf_sketch(
             replica_id,
             (sketch_len * mem::size_of::<u64>()) as u64,
         );
-        local_only.extend(sender_riblt.get_remote_only_symbols());
+        b_only.extend(sender_riblt.get_remote_only_symbols());
+        a_only.extend(sender_riblt.get_local_only_symbols());
     }
-    local_only
+    (b_only, a_only)
 }
 
 /// Topology-aware hybrid protocol.
 ///
 /// Star/Tree: one BF+RIBLT sketch in round 1, then eager-forward every
 ///   newly received element to all other neighbours (sent_to dedup).
-///   Elements propagate across the network in O(depth) rounds without
-///   further sketch overhead.
 ///
-/// Chord: pairwise BF+RIBLT, like HybridRbfRiblt.  Repeated sketch→element
-///   cycles because Chord's diameter requires multi-hop propagation and
-///   naive eager flooding causes O(degree) cascade storms that more than
-///   double the bandwidth.
+/// Chord: asymmetric distance-doubling.  For each power 0→4, a 3-step cycle:
+///   Step 0: lower-id node sketches to higher-id (one direction only).
+///   Step 1: higher-id drains b-only elements to lower-id + sends RibltSketch
+///           request listing a-only digests it needs.
+///   Step 2: lower-id drains a-only response elements to higher-id.
+///
+/// This halves the BF+RIBLT metadata vs symmetric pairwise sketching:
+/// the receiver decodes both directions of the diff from one sketch,
+/// and communicates the missing a-only digests via a cheap per-digest request.
 pub struct MultiReplicaV2Protocol {
     m_ratio: f64,
-    /// Higher m_ratio for Chord: 50% Jaccard → large diffs → need lower BF FPR
-    /// to reduce RIBLT false-positive overhead.
     chord_m_ratio: f64,
     state: HashMap<usize, ReplicaState>,
 }
@@ -68,8 +73,10 @@ struct ReplicaState {
     sent_to: HashMap<usize, HashSet<u64>>,
     /// One-shot sketch flag for Star/Tree.
     sketch_sent: bool,
-    /// Chord sequential: which power (0-4 → distances 1,2,4,8,16) to sketch next.
-    chord_sketch_power: usize,
+    /// Chord: overall round counter (power = chord_round/3 % 5, step = chord_round%3).
+    chord_round: usize,
+    /// Chord asymmetric: a-only digests to request from the sketching node in step 1.
+    chord_pending_requests: HashMap<usize, Vec<u64>>,
 }
 
 impl MultiReplicaV2Protocol {
@@ -101,31 +108,33 @@ impl Protocol for MultiReplicaV2Protocol {
         topology: &Topology,
         network: &mut SendView<ProtocolMsg>,
     ) {
-        // Compute sketch params before taking the state borrow.
         let local_digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
-        let bloom_bits = self.bloom_bits_for(local_digests.len(), topology.kind == TopologyKind::Chord);
+        let bloom_bits = self.bloom_bits_for(
+            local_digests.len(),
+            topology.kind == TopologyKind::Chord,
+        );
 
         let state = self.state.entry(replica_id).or_default();
 
         if topology.kind == TopologyKind::Chord {
-            // Sequential distance-doubling: sketch only the neighbors at
-            // distance 2^power in each sketch round (power advances 0→4).
-            // Each directed edge sketched exactly once → 3× fewer decode
-            // events than sketch-all-neighbors.  After power 4 (distance 16),
-            // window covers all 32 nodes; cycle restarts if not yet converged.
-            if state.pending.is_empty() {
-                let n = topology.node_count();
-                let power = state.chord_sketch_power % 5;
-                let offset = 1usize << power;
-                let forward = (replica_id + offset) % n;
-                let backward = (replica_id + n - offset) % n;
-                let sketch_targets: Vec<usize> = if forward == backward {
+            let n = topology.node_count();
+            let power = (state.chord_round / 3) % 5;
+            let step = state.chord_round % 3;
+            state.chord_round += 1;
+
+            let offset = 1usize << power;
+            let forward = (replica_id + offset) % n;
+            let backward = (replica_id + n - offset) % n;
+
+            if step == 0 {
+                // Asymmetric sketch: only lower-id → higher-id.
+                let targets: Vec<usize> = if forward == backward {
                     vec![forward]
                 } else {
                     vec![forward, backward]
                 };
-                for nb in sketch_targets {
-                    if topology.is_neighbor(replica_id, nb) {
+                for nb in targets {
+                    if topology.is_neighbor(replica_id, nb) && replica_id < nb {
                         network.send(
                             replica_id,
                             nb,
@@ -137,8 +146,45 @@ impl Protocol for MultiReplicaV2Protocol {
                         );
                     }
                 }
-                state.chord_sketch_power += 1;
+                // Drain any leftover pending from previous power's step 2.
+                let pending = std::mem::take(&mut state.pending);
+                for (nb, elements) in pending {
+                    if !elements.is_empty() {
+                        network.send(
+                            replica_id,
+                            nb,
+                            ProtocolMsg::Elements(elements),
+                            SimulatorHint::None,
+                        );
+                    }
+                }
+            } else if step == 1 {
+                // Higher-id drains b-only to lower-id + sends request for a-only.
+                let pending = std::mem::take(&mut state.pending);
+                for (nb, elements) in pending {
+                    if !elements.is_empty() {
+                        network.send(
+                            replica_id,
+                            nb,
+                            ProtocolMsg::Elements(elements),
+                            SimulatorHint::None,
+                        );
+                    }
+                }
+                let requests = std::mem::take(&mut state.chord_pending_requests);
+                for (nb, digests) in requests {
+                    if !digests.is_empty() {
+                        let n_symbols = digests.len();
+                        network.send(
+                            replica_id,
+                            nb,
+                            ProtocolMsg::RibltSketch { symbols: n_symbols },
+                            SimulatorHint::RibltDigests { digests },
+                        );
+                    }
+                }
             } else {
+                // step == 2: lower-id drains a-only response to higher-id.
                 let pending = std::mem::take(&mut state.pending);
                 for (nb, elements) in pending {
                     if !elements.is_empty() {
@@ -192,7 +238,7 @@ impl Protocol for MultiReplicaV2Protocol {
         let mut next_set = local.snapshot_set();
 
         if topology.kind == TopologyKind::Chord {
-            // ── Chord: pairwise, no eager forwarding ─────────────────────────
+            // ── Chord: asymmetric pairwise, no eager forwarding ──────────────
 
             // Pass 1: merge received elements.
             for (_, msg, _) in &inbox {
@@ -203,45 +249,79 @@ impl Protocol for MultiReplicaV2Protocol {
                 }
             }
 
-            // Pass 2: decode sketches.  Collect (from, to_send) without
-            // holding a state borrow so decode_bf_sketch can take &mut network.
             let local_digests: Vec<u64> = next_set.iter().map(|e| e.digest).collect();
+            // Build digest lookup for fulfilling element requests.
+            let local_by_digest: HashMap<u64, Element> =
+                next_set.iter().map(|e| (e.digest, e.clone())).collect();
+
             let mut pending_updates: Vec<(usize, Vec<Element>)> = Vec::new();
+            let mut request_updates: Vec<(usize, Vec<u64>)> = Vec::new();
 
             for (from, msg, hint) in inbox {
-                if let ProtocolMsg::RatelessBloom { .. } = msg {
-                    let (sender_digests, bloom_bits) = match hint {
-                        SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
-                            (digests, bloom_bits)
+                match msg {
+                    ProtocolMsg::RatelessBloom { .. } => {
+                        let (sender_digests, bloom_bits) = match hint {
+                            SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
+                                (digests, bloom_bits)
+                            }
+                            _ => panic!("expected RatelessBloomDigests hint"),
+                        };
+                        let (b_only, a_only) = decode_bf_sketch(
+                            replica_id,
+                            sender_digests,
+                            bloom_bits,
+                            &local_digests,
+                            network,
+                        );
+                        // b-only: elements we have that sender lacks → queue to send back.
+                        let b_only_set: HashSet<u64> = b_only.into_iter().collect();
+                        let to_send: Vec<Element> = next_set
+                            .iter()
+                            .filter(|e| b_only_set.contains(&e.digest))
+                            .cloned()
+                            .collect();
+                        if !to_send.is_empty() {
+                            pending_updates.push((from, to_send));
                         }
-                        _ => panic!("expected RatelessBloomDigests hint"),
-                    };
-                    let local_only =
-                        decode_bf_sketch(replica_id, sender_digests, bloom_bits, &local_digests, network);
-                    let missing_set: HashSet<u64> = local_only.into_iter().collect();
-                    let to_send: Vec<Element> = next_set
-                        .iter()
-                        .filter(|e| missing_set.contains(&e.digest))
-                        .cloned()
-                        .collect();
-                    if !to_send.is_empty() {
-                        pending_updates.push((from, to_send));
+                        // a-only: elements sender has that we lack → request them.
+                        if !a_only.is_empty() {
+                            request_updates.push((from, a_only));
+                        }
                     }
+                    ProtocolMsg::RibltSketch { .. } => {
+                        // Request message: find elements matching requested digests.
+                        let requested_digests = match hint {
+                            SimulatorHint::RibltDigests { digests } => digests,
+                            _ => panic!("expected RibltDigests hint for RibltSketch request"),
+                        };
+                        let to_send: Vec<Element> = requested_digests
+                            .iter()
+                            .filter_map(|d| local_by_digest.get(d).cloned())
+                            .collect();
+                        if !to_send.is_empty() {
+                            pending_updates.push((from, to_send));
+                        }
+                    }
+                    _ => {}
                 }
             }
 
-            // Flush collected updates into state.
             let state = self.state.entry(replica_id).or_default();
             for (from, to_send) in pending_updates {
                 state.pending.entry(from).or_default().extend(to_send);
+            }
+            for (from, digests) in request_updates {
+                state
+                    .chord_pending_requests
+                    .entry(from)
+                    .or_default()
+                    .extend(digests);
             }
         } else {
             // ── Star/Tree: single sketch + eager forwarding ──────────────────
 
             let mut newly_received: Vec<(Element, usize)> = Vec::new();
 
-            // Pass 1: merge elements and track what's new.
-            // (no state borrow needed here)
             for (from, msg, _) in &inbox {
                 if let ProtocolMsg::Elements(els) = msg {
                     for element in els {
@@ -252,7 +332,6 @@ impl Protocol for MultiReplicaV2Protocol {
                 }
             }
 
-            // Pass 2: decode sketches.  Collect results first (no state borrow).
             let local_digests: Vec<u64> = next_set.iter().map(|e| e.digest).collect();
             let mut sketch_results: Vec<(usize, HashSet<u64>)> = Vec::new();
 
@@ -264,13 +343,17 @@ impl Protocol for MultiReplicaV2Protocol {
                         }
                         _ => panic!("expected RatelessBloomDigests hint"),
                     };
-                    let local_only =
-                        decode_bf_sketch(replica_id, sender_digests, bloom_bits, &local_digests, network);
+                    let (local_only, _a_only) = decode_bf_sketch(
+                        replica_id,
+                        sender_digests,
+                        bloom_bits,
+                        &local_digests,
+                        network,
+                    );
                     sketch_results.push((from, local_only.into_iter().collect()));
                 }
             }
 
-            // Update state: queue elements from sketch decodes + eager forwards.
             let state = self.state.entry(replica_id).or_default();
 
             for (from, missing_set) in sketch_results {
@@ -287,7 +370,6 @@ impl Protocol for MultiReplicaV2Protocol {
                 }
             }
 
-            // Eager-forward newly received elements to all other neighbours.
             let neighbors: Vec<usize> = topology.neighbors(replica_id).to_vec();
             for (element, from_nb) in &newly_received {
                 for &nb in &neighbors {
