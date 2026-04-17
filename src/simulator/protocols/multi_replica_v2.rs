@@ -3,25 +3,22 @@ use std::mem;
 
 use crate::simulator::algorithms::rateless_bloom::bayesian_cost::RATELESS_SET_RECONCILIATION_OVERHEAD;
 use crate::simulator::algorithms::rateless_bloom::expected_cost::ExpectedCostFactory;
-use crate::simulator::algorithms::rateless_bloom::{RatelessBF, StoppingStrategyFactory};
+use crate::simulator::algorithms::rateless_bloom::RatelessBF;
 use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::{RecvView, SendView};
 use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
 use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolKind, ProtocolStepResult};
 use crate::simulator::replica::{Element, Replica};
-use crate::simulator::topology::{Topology, TopologyKind};
+use crate::simulator::topology::Topology;
 
-/// Hybrid BF+RIBLT with eager forwarding and topology-aware cascade control.
+/// Hybrid BF+RIBLT with eager forwarding.
 ///
-/// Round 1: every replica sends a single RatelessBloom sketch to all neighbours.
-/// recv round 1: decode sketches → queue missing elements per neighbour.
-/// Rounds 2+: drain pending elements; newly received elements are eagerly
-/// forwarded to other neighbours with sent_to dedup to prevent echoes.
-///
-/// For Chord (high-degree, high-redundancy) eager forwarding uses hash-based
-/// forwarder selection: for each (element, destination) pair, only the
-/// designated neighbour (element.digest % dest_degree == my_rank_at_dest)
-/// forwards, eliminating O(degree) cascade storms.
+/// Round 1: every replica sends a RatelessBloom sketch to all neighbours.
+/// recv round 1: decode each sketch → determine what the sender is missing →
+///   queue those elements to send in the next send_phase.
+/// Rounds 2+: drain pending elements; when new elements arrive, eagerly
+///   forward them to all other neighbours (with sent_to dedup to prevent
+///   echo and re-sends).
 pub struct MultiReplicaV2Protocol {
     m_ratio: f64,
     state: HashMap<usize, ReplicaState>,
@@ -29,9 +26,13 @@ pub struct MultiReplicaV2Protocol {
 
 #[derive(Default)]
 struct ReplicaState {
+    /// Elements queued to send to each neighbour (pre-deduped via sent_to).
     pending: HashMap<usize, Vec<Element>>,
-    /// Dedup gate: digests already committed to each neighbour.
+    /// Digests already committed to send to each neighbour.
+    /// Acts as a dedup gate: once a digest is in sent_to[N], we never
+    /// queue it for N again.
     sent_to: HashMap<usize, HashSet<u64>>,
+    /// Whether the initial BF sketch has been sent.
     sketch_sent: bool,
 }
 
@@ -62,22 +63,19 @@ impl Protocol for MultiReplicaV2Protocol {
         topology: &Topology,
         network: &mut SendView<ProtocolMsg>,
     ) {
-        let (sketch_digests, bloom_bits) = {
-            let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
-            let bits = self.bloom_bits_for(digests.len());
-            (digests, bits)
-        };
-
         let state = self.state.entry(replica_id).or_default();
 
+        // Send the BF sketch exactly once.
         if !state.sketch_sent {
+            let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
+            let bloom_bits = self.bloom_bits_for(digests.len());
             for &neighbor_id in topology.neighbors(replica_id) {
                 network.send(
                     replica_id,
                     neighbor_id,
                     ProtocolMsg::RatelessBloom { byte_len: 0 },
                     SimulatorHint::RatelessBloomDigests {
-                        digests: sketch_digests.clone(),
+                        digests: digests.clone(),
                         bloom_bits,
                     },
                 );
@@ -85,6 +83,7 @@ impl Protocol for MultiReplicaV2Protocol {
             state.sketch_sent = true;
         }
 
+        // Drain pending element queue.
         let pending = std::mem::take(&mut state.pending);
         for (neighbor_id, elements) in pending {
             if !elements.is_empty() {
@@ -107,11 +106,13 @@ impl Protocol for MultiReplicaV2Protocol {
         network: &mut RecvView<ProtocolMsg>,
     ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
+        // (element, source_neighbour) — elements newly added to our set this round.
         let mut newly_received: Vec<(Element, usize)> = Vec::new();
 
         let state = self.state.entry(replica_id).or_default();
 
-        // Pass 1: Elements first — fresher set for sketch decoding.
+        // Pass 1: Process Elements messages first to get the most up-to-date
+        // local set before we decode sketches.
         for (from, msg, _) in &inbox {
             if let ProtocolMsg::Elements(els) = msg {
                 for element in els {
@@ -122,7 +123,7 @@ impl Protocol for MultiReplicaV2Protocol {
             }
         }
 
-        // Pass 2: Decode BF sketches.
+        // Pass 2: Decode BF sketches and queue missing elements to send.
         for (from, msg, hint) in inbox {
             if let ProtocolMsg::RatelessBloom { .. } = msg {
                 let (sender_digests, bloom_bits) = match hint {
@@ -135,6 +136,8 @@ impl Protocol for MultiReplicaV2Protocol {
                 let effective_m_ratio =
                     bloom_bits as f64 / sender_digests.len().max(1) as f64;
                 let mut sender_filter = RatelessBF::new(sender_digests.clone(), bloom_bits);
+
+                // Use the updated local set (includes newly received elements).
                 let local_digests: Vec<u64> = next_set.iter().map(|e| e.digest).collect();
                 let stopping_strategy = ExpectedCostFactory::new(effective_m_ratio)
                     .create(local_digests, sender_digests.len());
@@ -143,6 +146,11 @@ impl Protocol for MultiReplicaV2Protocol {
 
                 network.record_decoded_metadata(replica_id, sender_filter.size_of() as u64);
 
+                // Resolve ambiguous subset via RIBLT.
+                // definitely_missing: our digests the BF says sender definitely lacks.
+                // After RIBLT: sender_riblt.get_remote_only_symbols() = BF false
+                // positives = digests in common that are NOT in sender's set.
+                // Both are elements we have that sender doesn't → queue to send.
                 let mut local_only: Vec<u64> = definitely_missing;
                 if !common.is_empty() {
                     let mut sender_riblt = RatelessIBLT::riblt_from(sender_digests);
@@ -155,6 +163,7 @@ impl Protocol for MultiReplicaV2Protocol {
                     local_only.extend(sender_riblt.get_remote_only_symbols());
                 }
 
+                // Queue elements the sender is missing (guarded by sent_to dedup).
                 let missing_set: HashSet<u64> = local_only.into_iter().collect();
                 let to_send: Vec<Element> = {
                     let sent = state.sent_to.entry(from).or_default();
@@ -170,32 +179,15 @@ impl Protocol for MultiReplicaV2Protocol {
             }
         }
 
-        // Eager-forward newly received elements to other neighbours.
-        // For Chord: use hash-based forwarder selection to prevent cascade
-        // storms.  Only forward element E to neighbour nb if I am the
-        // designated forwarder: (E.digest % nb's degree) == my rank in nb's
-        // neighbour list.  This guarantees exactly one of nb's neighbours
-        // forwards each element to nb.
-        let use_forwarder_selection = topology.kind == TopologyKind::Chord;
+        // Eager-forward: any element newly added to our set gets forwarded to
+        // all neighbours except the one we got it from.  sent_to dedup ensures
+        // we never queue the same element to the same neighbour twice.
         let neighbors: Vec<usize> = topology.neighbors(replica_id).to_vec();
-
         for (element, from_nb) in &newly_received {
             for &nb in &neighbors {
                 if nb == *from_nb {
-                    continue;
+                    continue; // don't echo back
                 }
-
-                if use_forwarder_selection {
-                    let nb_neighbors = topology.neighbors(nb);
-                    let my_rank = nb_neighbors
-                        .iter()
-                        .position(|&x| x == replica_id)
-                        .unwrap_or(0);
-                    if (element.digest as usize) % nb_neighbors.len() != my_rank {
-                        continue; // not the designated forwarder for this (element, nb) pair
-                    }
-                }
-
                 let queued = {
                     let sent = state.sent_to.entry(nb).or_default();
                     sent.insert(element.digest)
