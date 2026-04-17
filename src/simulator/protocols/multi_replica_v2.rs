@@ -68,6 +68,8 @@ struct ReplicaState {
     sent_to: HashMap<usize, HashSet<u64>>,
     /// One-shot sketch flag for Star/Tree.
     sketch_sent: bool,
+    /// Chord sequential: which power (0-4 → distances 1,2,4,8,16) to sketch next.
+    chord_sketch_power: usize,
 }
 
 impl MultiReplicaV2Protocol {
@@ -106,19 +108,36 @@ impl Protocol for MultiReplicaV2Protocol {
         let state = self.state.entry(replica_id).or_default();
 
         if topology.kind == TopologyKind::Chord {
-            // Pairwise mode: sketch when nothing is pending, elements otherwise.
+            // Sequential distance-doubling: sketch only the neighbors at
+            // distance 2^power in each sketch round (power advances 0→4).
+            // Each directed edge sketched exactly once → 3× fewer decode
+            // events than sketch-all-neighbors.  After power 4 (distance 16),
+            // window covers all 32 nodes; cycle restarts if not yet converged.
             if state.pending.is_empty() {
-                for &nb in topology.neighbors(replica_id) {
-                    network.send(
-                        replica_id,
-                        nb,
-                        ProtocolMsg::RatelessBloom { byte_len: 0 },
-                        SimulatorHint::RatelessBloomDigests {
-                            digests: local_digests.clone(),
-                            bloom_bits,
-                        },
-                    );
+                let n = topology.node_count();
+                let power = state.chord_sketch_power % 5;
+                let offset = 1usize << power;
+                let forward = (replica_id + offset) % n;
+                let backward = (replica_id + n - offset) % n;
+                let sketch_targets: Vec<usize> = if forward == backward {
+                    vec![forward]
+                } else {
+                    vec![forward, backward]
+                };
+                for nb in sketch_targets {
+                    if topology.is_neighbor(replica_id, nb) {
+                        network.send(
+                            replica_id,
+                            nb,
+                            ProtocolMsg::RatelessBloom { byte_len: 0 },
+                            SimulatorHint::RatelessBloomDigests {
+                                digests: local_digests.clone(),
+                                bloom_bits,
+                            },
+                        );
+                    }
                 }
+                state.chord_sketch_power += 1;
             } else {
                 let pending = std::mem::take(&mut state.pending);
                 for (nb, elements) in pending {
