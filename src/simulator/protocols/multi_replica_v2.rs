@@ -68,9 +68,6 @@ struct ReplicaState {
     sent_to: HashMap<usize, HashSet<u64>>,
     /// One-shot sketch flag for Star/Tree.
     sketch_sent: bool,
-    /// Chord: set size when we last sent a sketch to each neighbor.
-    /// Skip re-sketch if our set hasn't grown since then.
-    set_size_at_last_sketch: HashMap<usize, usize>,
 }
 
 impl MultiReplicaV2Protocol {
@@ -111,21 +108,16 @@ impl Protocol for MultiReplicaV2Protocol {
         if topology.kind == TopologyKind::Chord {
             // Pairwise mode: sketch when nothing is pending, elements otherwise.
             if state.pending.is_empty() {
-                let cur_size = local_digests.len();
                 for &nb in topology.neighbors(replica_id) {
-                    let last = state.set_size_at_last_sketch.get(&nb).copied().unwrap_or(0);
-                    if cur_size > last {
-                        network.send(
-                            replica_id,
-                            nb,
-                            ProtocolMsg::RatelessBloom { byte_len: 0 },
-                            SimulatorHint::RatelessBloomDigests {
-                                digests: local_digests.clone(),
-                                bloom_bits,
-                            },
-                        );
-                        state.set_size_at_last_sketch.insert(nb, cur_size);
-                    }
+                    network.send(
+                        replica_id,
+                        nb,
+                        ProtocolMsg::RatelessBloom { byte_len: 0 },
+                        SimulatorHint::RatelessBloomDigests {
+                            digests: local_digests.clone(),
+                            bloom_bits,
+                        },
+                    );
                 }
             } else {
                 let pending = std::mem::take(&mut state.pending);
