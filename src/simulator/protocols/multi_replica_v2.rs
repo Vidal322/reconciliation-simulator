@@ -47,8 +47,6 @@ fn decode_bf_sketch(
     (b_only, a_only)
 }
 
-const REQUEST_FPR: f64 = 0.001;
-
 /// Topology-aware hybrid protocol.
 ///
 /// Star/Tree: one BF+RIBLT sketch in round 1, then eager-forward every
@@ -190,6 +188,7 @@ impl Protocol for MultiReplicaV2Protocol {
                         );
                     }
                 }
+                const REQUEST_FPR: f64 = 0.001;
                 let requests = std::mem::take(&mut state.chord_pending_requests);
                 for (nb, digests) in requests {
                     if !digests.is_empty() {
@@ -223,70 +222,30 @@ impl Protocol for MultiReplicaV2Protocol {
                 }
             }
         } else {
-            let n = topology.node_count();
-            let is_star_hub = topology.kind == TopologyKind::Star
-                && topology.neighbors(replica_id).len() == n.saturating_sub(1);
-
-            if is_star_hub {
-                // Star hub: never sends sketch — uses asymmetric approach.
-                // Round 1 send: nothing (pending/requests empty).
-                // Round 2 send: hub_only elements to leaves + BF requests for leaf_only.
+            // Star/Tree: one sketch up front, then drain elements every round.
+            if !state.sketch_sent {
+                for &nb in topology.neighbors(replica_id) {
+                    network.send(
+                        replica_id,
+                        nb,
+                        ProtocolMsg::RatelessBloom { byte_len: 0 },
+                        SimulatorHint::RatelessBloomDigests {
+                            digests: local_digests.clone(),
+                            bloom_bits,
+                        },
+                    );
+                }
                 state.sketch_sent = true;
-                let pending = std::mem::take(&mut state.pending);
-                for (nb, elements) in pending {
-                    if !elements.is_empty() {
-                        network.send(
-                            replica_id,
-                            nb,
-                            ProtocolMsg::Elements(elements),
-                            SimulatorHint::None,
-                        );
-                    }
-                }
-                let requests = std::mem::take(&mut state.chord_pending_requests);
-                for (nb, digests) in requests {
-                    if !digests.is_empty() {
-                        let bf_byte_len = {
-                            let tmp: BloomFilter<u64> = BloomFilter::new(digests.len(), REQUEST_FPR);
-                            tmp.byte_len()
-                        };
-                        network.send(
-                            replica_id,
-                            nb,
-                            ProtocolMsg::RatelessBloom { byte_len: bf_byte_len },
-                            SimulatorHint::BloomDigests {
-                                digests,
-                                false_positive_rate: REQUEST_FPR,
-                            },
-                        );
-                    }
-                }
-            } else {
-                // Star leaves + Tree: one sketch up front, then drain elements every round.
-                if !state.sketch_sent {
-                    for &nb in topology.neighbors(replica_id) {
-                        network.send(
-                            replica_id,
-                            nb,
-                            ProtocolMsg::RatelessBloom { byte_len: 0 },
-                            SimulatorHint::RatelessBloomDigests {
-                                digests: local_digests.clone(),
-                                bloom_bits,
-                            },
-                        );
-                    }
-                    state.sketch_sent = true;
-                }
-                let pending = std::mem::take(&mut state.pending);
-                for (nb, elements) in pending {
-                    if !elements.is_empty() {
-                        network.send(
-                            replica_id,
-                            nb,
-                            ProtocolMsg::Elements(elements),
-                            SimulatorHint::None,
-                        );
-                    }
+            }
+            let pending = std::mem::take(&mut state.pending);
+            for (nb, elements) in pending {
+                if !elements.is_empty() {
+                    network.send(
+                        replica_id,
+                        nb,
+                        ProtocolMsg::Elements(elements),
+                        SimulatorHint::None,
+                    );
                 }
             }
         }
@@ -402,12 +361,10 @@ impl Protocol for MultiReplicaV2Protocol {
                     .extend(digests);
             }
         } else {
-            // ── Star/Tree ─────────────────────────────────────────────────────
-            let n = topology.node_count();
-            let is_star_hub = topology.kind == TopologyKind::Star
-                && topology.neighbors(replica_id).len() == n.saturating_sub(1);
+            // ── Star/Tree: single sketch + eager forwarding ──────────────────
 
             let mut newly_received: Vec<(Element, usize)> = Vec::new();
+
             for (from, msg, _) in &inbox {
                 if let ProtocolMsg::Elements(els) = msg {
                     for element in els {
@@ -419,147 +376,55 @@ impl Protocol for MultiReplicaV2Protocol {
             }
 
             let local_digests: Vec<u64> = next_set.iter().map(|e| e.digest).collect();
+            let mut sketch_results: Vec<(usize, HashSet<u64>)> = Vec::new();
 
-            if is_star_hub {
-                // Star hub: decode leaf sketches → b_only→pending, a_only→requests.
-                // Eager-forward elements received from leaves to other leaves.
-                let mut pending_updates: Vec<(usize, Vec<Element>)> = Vec::new();
-                let mut request_updates: Vec<(usize, Vec<u64>)> = Vec::new();
-
-                for (from, msg, hint) in inbox {
-                    match (msg, hint) {
-                        (
-                            ProtocolMsg::RatelessBloom { .. },
-                            SimulatorHint::RatelessBloomDigests { digests, bloom_bits },
-                        ) => {
-                            let (b_only, a_only) = decode_bf_sketch(
-                                replica_id,
-                                digests,
-                                bloom_bits,
-                                &local_digests,
-                                network,
-                            );
-                            let b_only_set: HashSet<u64> = b_only.into_iter().collect();
-                            let to_send: Vec<Element> = next_set
-                                .iter()
-                                .filter(|e| b_only_set.contains(&e.digest))
-                                .cloned()
-                                .collect();
-                            if !to_send.is_empty() {
-                                pending_updates.push((from, to_send));
-                            }
-                            if !a_only.is_empty() {
-                                request_updates.push((from, a_only));
-                            }
+            for (from, msg, hint) in inbox {
+                if let ProtocolMsg::RatelessBloom { .. } = msg {
+                    let (sender_digests, bloom_bits) = match hint {
+                        SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
+                            (digests, bloom_bits)
                         }
-                        _ => {}
-                    }
-                }
-
-                let state = self.state.entry(replica_id).or_default();
-                for (from, elements) in pending_updates {
-                    let sent = state.sent_to.entry(from).or_default();
-                    let deduped: Vec<Element> =
-                        elements.into_iter().filter(|e| sent.insert(e.digest)).collect();
-                    if !deduped.is_empty() {
-                        state.pending.entry(from).or_default().extend(deduped);
-                    }
-                }
-                for (from, digests) in request_updates {
-                    state
-                        .chord_pending_requests
-                        .entry(from)
-                        .or_default()
-                        .extend(digests);
-                }
-                let neighbors: Vec<usize> = topology.neighbors(replica_id).to_vec();
-                for (element, from_nb) in &newly_received {
-                    for &nb in &neighbors {
-                        if nb == *from_nb {
-                            continue;
-                        }
-                        let queued = {
-                            let sent = state.sent_to.entry(nb).or_default();
-                            sent.insert(element.digest)
-                        };
-                        if queued {
-                            state.pending.entry(nb).or_default().push(element.clone());
-                        }
-                    }
-                }
-            } else {
-                // Star leaves + Tree: decode neighbor sketches; handle BF request from hub.
-                let mut sketch_results: Vec<(usize, HashSet<u64>)> = Vec::new();
-                let mut bf_request_results: Vec<(usize, Vec<Element>)> = Vec::new();
-
-                for (from, msg, hint) in inbox {
-                    if let ProtocolMsg::RatelessBloom { .. } = msg {
-                        match hint {
-                            SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
-                                let (local_only, _) = decode_bf_sketch(
-                                    replica_id,
-                                    digests,
-                                    bloom_bits,
-                                    &local_digests,
-                                    network,
-                                );
-                                sketch_results.push((from, local_only.into_iter().collect()));
-                            }
-                            SimulatorHint::BloomDigests {
-                                digests,
-                                false_positive_rate,
-                            } => {
-                                // BF request from Star hub: send back matching local elements.
-                                let mut bf: BloomFilter<u64> =
-                                    BloomFilter::new(digests.len().max(1), false_positive_rate);
-                                for &d in &digests {
-                                    bf.insert(&d);
-                                }
-                                let to_send: Vec<Element> = next_set
-                                    .iter()
-                                    .filter(|e| bf.contains(&e.digest))
-                                    .cloned()
-                                    .collect();
-                                if !to_send.is_empty() {
-                                    bf_request_results.push((from, to_send));
-                                }
-                            }
-                            _ => panic!("unexpected hint for RatelessBloom"),
-                        }
-                    }
-                }
-
-                let state = self.state.entry(replica_id).or_default();
-                for (from, missing_set) in sketch_results {
-                    let to_send: Vec<Element> = {
-                        let sent = state.sent_to.entry(from).or_default();
-                        next_set
-                            .iter()
-                            .filter(|e| missing_set.contains(&e.digest) && sent.insert(e.digest))
-                            .cloned()
-                            .collect()
+                        _ => panic!("expected RatelessBloomDigests hint"),
                     };
-                    if !to_send.is_empty() {
-                        state.pending.entry(from).or_default().extend(to_send);
-                    }
+                    let (local_only, _a_only) = decode_bf_sketch(
+                        replica_id,
+                        sender_digests,
+                        bloom_bits,
+                        &local_digests,
+                        network,
+                    );
+                    sketch_results.push((from, local_only.into_iter().collect()));
                 }
-                for (from, elements) in bf_request_results {
-                    state.pending.entry(from).or_default().extend(elements);
-                }
+            }
 
-                let neighbors: Vec<usize> = topology.neighbors(replica_id).to_vec();
-                for (element, from_nb) in &newly_received {
-                    for &nb in &neighbors {
-                        if nb == *from_nb {
-                            continue;
-                        }
-                        let queued = {
-                            let sent = state.sent_to.entry(nb).or_default();
-                            sent.insert(element.digest)
-                        };
-                        if queued {
-                            state.pending.entry(nb).or_default().push(element.clone());
-                        }
+            let state = self.state.entry(replica_id).or_default();
+
+            for (from, missing_set) in sketch_results {
+                let to_send: Vec<Element> = {
+                    let sent = state.sent_to.entry(from).or_default();
+                    next_set
+                        .iter()
+                        .filter(|e| missing_set.contains(&e.digest) && sent.insert(e.digest))
+                        .cloned()
+                        .collect()
+                };
+                if !to_send.is_empty() {
+                    state.pending.entry(from).or_default().extend(to_send);
+                }
+            }
+
+            let neighbors: Vec<usize> = topology.neighbors(replica_id).to_vec();
+            for (element, from_nb) in &newly_received {
+                for &nb in &neighbors {
+                    if nb == *from_nb {
+                        continue;
+                    }
+                    let queued = {
+                        let sent = state.sent_to.entry(nb).or_default();
+                        sent.insert(element.digest)
+                    };
+                    if queued {
+                        state.pending.entry(nb).or_default().push(element.clone());
                     }
                 }
             }
