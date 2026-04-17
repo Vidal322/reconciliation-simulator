@@ -64,10 +64,7 @@ impl<T: Hash + Clone + Eq> StoppingStrategyFactory<T> for BayesianSimilarityFact
     fn create(&self, elements: Vec<T>, sample_size: usize) -> Self::Strategy {
         let mut rng: rand::prelude::StdRng = rand::rngs::StdRng::seed_from_u64(42);
 
-        let sampled_elements: Vec<_> = elements
-            .choose_multiple(&mut rng, sample_size)
-            .cloned()
-            .collect();
+        let sampled_elements: Vec<_> = elements.sample(&mut rng, sample_size).cloned().collect();
 
         let sampled_elements_set: HashSet<_> = sampled_elements.iter().collect();
 
