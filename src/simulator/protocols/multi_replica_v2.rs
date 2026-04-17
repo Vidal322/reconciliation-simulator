@@ -75,7 +75,7 @@ struct ReplicaState {
 impl MultiReplicaV2Protocol {
     pub fn new() -> Self {
         Self {
-            m_ratio: 0.5,
+            m_ratio: 1.0,
             chord_m_ratio: 1.0,
             state: HashMap::new(),
         }
