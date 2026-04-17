@@ -6,88 +6,6 @@ use simulator::protocols::ProtocolKind;
 use simulator::topology::TopologyKind;
 use simulator::workload::{DivergencePattern, WorkloadConfig};
 
-fn parse_protocol(name: &str) -> ProtocolKind {
-    match name {
-        "FullStateTransfer" => ProtocolKind::FullStateTransfer,
-        "Riblt" => ProtocolKind::Riblt,
-        "StaticBfIblt" => ProtocolKind::StaticBfIblt,
-        "HybridRbfRiblt" => ProtocolKind::HybridRbfRiblt,
-        "MultiReplica" => ProtocolKind::MultiReplica,
-        _ => {
-            eprintln!("Unknown protocol: {name}");
-            eprintln!(
-                "Available: FullStateTransfer, Riblt, StaticBfIblt, HybridRbfRiblt, MultiReplica"
-            );
-            std::process::exit(1);
-        }
-    }
-}
-
-struct CliArgs {
-    protocol_filter: Option<ProtocolKind>,
-    json: bool,
-}
-
-fn parse_args() -> CliArgs {
-    let args: Vec<String> = std::env::args().collect();
-    let mut protocol_filter = None;
-    let mut json = false;
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--protocol" => {
-                i += 1;
-                if i >= args.len() {
-                    eprintln!("--protocol requires a value");
-                    std::process::exit(1);
-                }
-                protocol_filter = Some(parse_protocol(&args[i]));
-            }
-            "--json" => {
-                json = true;
-            }
-            other => {
-                eprintln!("Unknown argument: {other}");
-                std::process::exit(1);
-            }
-        }
-        i += 1;
-    }
-    CliArgs {
-        protocol_filter,
-        json,
-    }
-}
-
-fn print_json(results: &[(SimulationResult, usize, f64)]) {
-    println!("{{");
-    println!("  \"runs\": [");
-    for (i, (result, target_union_size, jaccard_similarity)) in results.iter().enumerate() {
-        let total_sent =
-            result.metrics.total_state_bytes_sent + result.metrics.total_metadata_bytes_sent;
-        let comma = if i + 1 < results.len() { "," } else { "" };
-        println!("    {{");
-        println!("      \"protocol\": \"{:?}\",", result.protocol);
-        println!("      \"topology\": \"{:?}\",", result.topology);
-        println!("      \"converged\": {},", result.converged);
-        println!("      \"rounds\": {},", result.rounds);
-        println!("      \"total_bytes_sent\": {},", total_sent);
-        println!(
-            "      \"total_state_bytes_sent\": {},",
-            result.metrics.total_state_bytes_sent
-        );
-        println!(
-            "      \"total_metadata_bytes_sent\": {},",
-            result.metrics.total_metadata_bytes_sent
-        );
-        println!("      \"target_union_size\": {}", target_union_size);
-        println!("      \"jaccard_similarity\": {}", jaccard_similarity);
-        println!("    }}{comma}");
-    }
-    println!("  ]");
-    println!("}}");
-}
-
 fn print_human(result: &SimulationResult, simulation: &Simulation) {
     println!("====================================================");
     println!("Protocol: {:?}", result.protocol);
@@ -137,27 +55,6 @@ fn print_human(result: &SimulationResult, simulation: &Simulation) {
     println!("Total bytes sent:       {}", total_sent);
     println!("Total bytes received:   {}", total_received);
 
-    println!("\n--- Sanity Expectations ---");
-    match result.protocol {
-        ProtocolKind::FullStateTransfer => {
-            println!("Expected: high state bytes, near-zero metadata bytes.");
-        }
-        ProtocolKind::Riblt => {
-            println!("Expected: near-zero state bytes, nonzero metadata bytes.");
-        }
-        ProtocolKind::StaticBfIblt => {
-            println!("Expected: both metadata and some state bytes.");
-        }
-        ProtocolKind::HybridRbfRiblt => {
-            println!(
-                "Expected: metadata bytes lower than pure RIBLT in many cases, and some state bytes."
-            );
-        }
-        ProtocolKind::MultiReplica => {
-            println!("Agent-target protocol. Baseline: full state transfer.");
-        }
-    }
-
     println!("\n--- Per-node Metrics ---");
     for node in &result.metrics.per_node {
         println!(
@@ -187,9 +84,7 @@ fn print_human(result: &SimulationResult, simulation: &Simulation) {
 }
 
 fn main() {
-    let cli = parse_args();
-
-    let all_protocols = [
+    let protocols = [
         ProtocolKind::FullStateTransfer,
         ProtocolKind::Riblt,
         ProtocolKind::StaticBfIblt,
@@ -197,16 +92,9 @@ fn main() {
         ProtocolKind::MultiReplica,
     ];
 
-    let protocols: Vec<ProtocolKind> = match cli.protocol_filter {
-        Some(p) => vec![p],
-        None => all_protocols.to_vec(),
-    };
-
     let topologies = [TopologyKind::Star, TopologyKind::Tree, TopologyKind::Chord];
 
-    let mut json_results: Vec<(SimulationResult, usize, f64)> = Vec::new();
-
-    for protocol in &protocols {
+    for protocol in protocols {
         for topology in topologies {
             let workload = WorkloadConfig {
                 num_replicas: 32,
@@ -227,7 +115,7 @@ fn main() {
                 round_cap: 100,
                 seed: 42,
                 topology,
-                protocol: *protocol,
+                protocol,
                 workload,
             };
 
@@ -237,19 +125,7 @@ fn main() {
             let row = RunSummaryRow::from_run(&config, &result, simulation.target_union().len());
             append_run_summary_csv("results.csv", &row).expect("failed to write CSV");
 
-            if cli.json {
-                json_results.push((
-                    result,
-                    simulation.target_union().len(),
-                    config.workload.jaccard_similarity,
-                ));
-            } else {
-                print_human(&result, &simulation);
-            }
+            print_human(&result, &simulation);
         }
-    }
-
-    if cli.json {
-        print_json(&json_results);
     }
 }
