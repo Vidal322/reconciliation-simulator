@@ -126,15 +126,29 @@ impl Protocol for MultiReplicaV2Protocol {
                 };
                 for nb in sketch_targets {
                     if topology.is_neighbor(replica_id, nb) {
-                        network.send(
-                            replica_id,
-                            nb,
-                            ProtocolMsg::RatelessBloom { byte_len: 0 },
-                            SimulatorHint::RatelessBloomDigests {
-                                digests: local_digests.clone(),
-                                bloom_bits,
-                            },
-                        );
+                        if power == 0 {
+                            // Power 0: large initial diff, BF pre-filtering saves more than BF costs.
+                            network.send(
+                                replica_id,
+                                nb,
+                                ProtocolMsg::RatelessBloom { byte_len: 0 },
+                                SimulatorHint::RatelessBloomDigests {
+                                    digests: local_digests.clone(),
+                                    bloom_bits,
+                                },
+                            );
+                        } else {
+                            // Powers 1-4: BF layer cost (∝ grown set size) exceeds savings
+                            // over pure RIBLT whose cost scales only with diff size.
+                            network.send(
+                                replica_id,
+                                nb,
+                                ProtocolMsg::RibltSketch { symbols: 0 },
+                                SimulatorHint::RibltDigests {
+                                    digests: local_digests.clone(),
+                                },
+                            );
+                        }
                     }
                 }
                 state.chord_sketch_power += 1;
@@ -209,24 +223,40 @@ impl Protocol for MultiReplicaV2Protocol {
             let mut pending_updates: Vec<(usize, Vec<Element>)> = Vec::new();
 
             for (from, msg, hint) in inbox {
-                if let ProtocolMsg::RatelessBloom { .. } = msg {
-                    let (sender_digests, bloom_bits) = match hint {
-                        SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
-                            (digests, bloom_bits)
-                        }
-                        _ => panic!("expected RatelessBloomDigests hint"),
-                    };
-                    let local_only =
-                        decode_bf_sketch(replica_id, sender_digests, bloom_bits, &local_digests, network);
-                    let missing_set: HashSet<u64> = local_only.into_iter().collect();
-                    let to_send: Vec<Element> = next_set
-                        .iter()
-                        .filter(|e| missing_set.contains(&e.digest))
-                        .cloned()
-                        .collect();
-                    if !to_send.is_empty() {
-                        pending_updates.push((from, to_send));
+                let local_only: Vec<u64> = match msg {
+                    ProtocolMsg::RatelessBloom { .. } => {
+                        let (sender_digests, bloom_bits) = match hint {
+                            SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
+                                (digests, bloom_bits)
+                            }
+                            _ => panic!("expected RatelessBloomDigests hint"),
+                        };
+                        decode_bf_sketch(replica_id, sender_digests, bloom_bits, &local_digests, network)
                     }
+                    ProtocolMsg::RibltSketch { .. } => {
+                        let sender_digests = match hint {
+                            SimulatorHint::RibltDigests { digests } => digests,
+                            _ => panic!("expected RibltDigests hint"),
+                        };
+                        let mut local_riblt = RatelessIBLT::riblt_from(local_digests.iter().cloned());
+                        let mut remote_riblt = RatelessIBLT::riblt_from(sender_digests);
+                        let sketch_len = local_riblt.find_all_differences(&mut remote_riblt);
+                        network.record_decoded_metadata(
+                            replica_id,
+                            (sketch_len * mem::size_of::<u64>()) as u64,
+                        );
+                        local_riblt.get_local_only_symbols()
+                    }
+                    _ => continue,
+                };
+                let missing_set: HashSet<u64> = local_only.into_iter().collect();
+                let to_send: Vec<Element> = next_set
+                    .iter()
+                    .filter(|e| missing_set.contains(&e.digest))
+                    .cloned()
+                    .collect();
+                if !to_send.is_empty() {
+                    pending_updates.push((from, to_send));
                 }
             }
 
