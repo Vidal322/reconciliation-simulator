@@ -80,6 +80,10 @@ struct ReplicaState {
     chord_round: usize,
     /// Chord asymmetric: a-only digests to request from the sketching node in step 1.
     chord_pending_requests: HashMap<usize, Vec<u64>>,
+    /// Star hub + Tree: elements each neighbor is known to already have (from a_only
+    /// of their incoming sketch decode). Used to skip forwarding to nodes that
+    /// already possess the element — avoids redundant eager-forward sends.
+    neighbor_has: HashMap<usize, HashSet<u64>>,
 }
 
 impl MultiReplicaV2Protocol {
@@ -470,12 +474,12 @@ impl Protocol for MultiReplicaV2Protocol {
 
             if is_star_hub {
                 // Star hub: decode leaf sketches → b_only→pending, a_only→requests.
-                // Eager-forward elements received from leaves to other leaves.
-                // Dedup a_only across leaves: each missing element is requested from
-                // exactly ONE leaf (the first processed that has it), avoiding
-                // duplicate responses when multiple leaves share an element hub lacks.
+                // Dedup a_only across leaves (request each missing element from one leaf).
+                // Also record full a_only in neighbor_has to skip forwarding to leaves
+                // that already possess the element (eliminates redundant forward sends).
                 let mut pending_updates: Vec<(usize, Vec<Element>)> = Vec::new();
                 let mut request_updates: Vec<(usize, Vec<u64>)> = Vec::new();
+                let mut neighbor_has_updates: Vec<(usize, Vec<u64>)> = Vec::new();
                 let mut already_requested: HashSet<u64> = HashSet::new();
 
                 for (from, msg, hint) in inbox {
@@ -500,7 +504,9 @@ impl Protocol for MultiReplicaV2Protocol {
                             if !to_send.is_empty() {
                                 pending_updates.push((from, to_send));
                             }
-                            // Only request elements not yet requested from another leaf.
+                            // Record full a_only so we know this leaf already has these elements.
+                            neighbor_has_updates.push((from, a_only.clone()));
+                            // Only request from the first leaf that has each missing element.
                             let new_requests: Vec<u64> = a_only
                                 .into_iter()
                                 .filter(|d| already_requested.insert(*d))
@@ -529,10 +535,24 @@ impl Protocol for MultiReplicaV2Protocol {
                         .or_default()
                         .extend(digests);
                 }
+                for (from, digests) in neighbor_has_updates {
+                    let set = state.neighbor_has.entry(from).or_default();
+                    for d in digests {
+                        set.insert(d);
+                    }
+                }
                 let neighbors: Vec<usize> = topology.neighbors(replica_id).to_vec();
                 for (element, from_nb) in &newly_received {
                     for &nb in &neighbors {
                         if nb == *from_nb {
+                            continue;
+                        }
+                        // Skip if this neighbor is known to already have the element.
+                        if state
+                            .neighbor_has
+                            .get(&nb)
+                            .map_or(false, |s| s.contains(&element.digest))
+                        {
                             continue;
                         }
                         let queued = {
@@ -590,9 +610,9 @@ impl Protocol for MultiReplicaV2Protocol {
                 }
 
                 let state = self.state.entry(replica_id).or_default();
-                // Dedup a_only: if multiple lower-id neighbors have an element this
-                // node lacks, request from only the first one processed (avoids
-                // receiving duplicate copies via parallel BF responses).
+                // Dedup a_only: request each missing element from one neighbor only.
+                // Also populate neighbor_has so eager-forward can skip nodes that
+                // already have the element.
                 let mut already_requested: HashSet<u64> = HashSet::new();
                 for (from, missing_set, a_only) in sketch_results {
                     // b_only: queue elements to send to sketcher
@@ -607,7 +627,12 @@ impl Protocol for MultiReplicaV2Protocol {
                     if !to_send.is_empty() {
                         state.pending.entry(from).or_default().extend(to_send);
                     }
-                    // a_only: request from sketcher via BF next round (Tree only; no-op for Star leaves)
+                    // Record that this neighbor already has these elements.
+                    let neighbor_set = state.neighbor_has.entry(from).or_default();
+                    for &d in &a_only {
+                        neighbor_set.insert(d);
+                    }
+                    // Request each missing element from only one neighbor.
                     let new_a_only: Vec<u64> = a_only
                         .into_iter()
                         .filter(|d| already_requested.insert(*d))
@@ -628,6 +653,14 @@ impl Protocol for MultiReplicaV2Protocol {
                 for (element, from_nb) in &newly_received {
                     for &nb in &neighbors {
                         if nb == *from_nb {
+                            continue;
+                        }
+                        // Skip if this neighbor is known to already have the element.
+                        if state
+                            .neighbor_has
+                            .get(&nb)
+                            .map_or(false, |s| s.contains(&element.digest))
+                        {
                             continue;
                         }
                         let queued = {
