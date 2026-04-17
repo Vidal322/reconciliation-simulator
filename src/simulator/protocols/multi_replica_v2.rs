@@ -261,8 +261,56 @@ impl Protocol for MultiReplicaV2Protocol {
                         );
                     }
                 }
+            } else if topology.kind == TopologyKind::Tree {
+                // Tree: asymmetric per edge — lower-id sketches to higher-id.
+                // Higher-id decodes both b_only (sends to lower-id) and a_only (BF request).
+                if !state.sketch_sent {
+                    for &nb in topology.neighbors(replica_id) {
+                        if replica_id < nb {
+                            network.send(
+                                replica_id,
+                                nb,
+                                ProtocolMsg::RatelessBloom { byte_len: 0 },
+                                SimulatorHint::RatelessBloomDigests {
+                                    digests: local_digests.clone(),
+                                    bloom_bits,
+                                },
+                            );
+                        }
+                    }
+                    state.sketch_sent = true;
+                }
+                let pending = std::mem::take(&mut state.pending);
+                for (nb, elements) in pending {
+                    if !elements.is_empty() {
+                        network.send(
+                            replica_id,
+                            nb,
+                            ProtocolMsg::Elements(elements),
+                            SimulatorHint::None,
+                        );
+                    }
+                }
+                let requests = std::mem::take(&mut state.chord_pending_requests);
+                for (nb, digests) in requests {
+                    if !digests.is_empty() {
+                        let bf_byte_len = {
+                            let tmp: BloomFilter<u64> = BloomFilter::new(digests.len(), REQUEST_FPR);
+                            tmp.byte_len()
+                        };
+                        network.send(
+                            replica_id,
+                            nb,
+                            ProtocolMsg::RatelessBloom { byte_len: bf_byte_len },
+                            SimulatorHint::BloomDigests {
+                                digests,
+                                false_positive_rate: REQUEST_FPR,
+                            },
+                        );
+                    }
+                }
             } else {
-                // Star leaves + Tree: one sketch up front, then drain elements every round.
+                // Star leaves: sketch to hub (which is lower-id = node 0).
                 if !state.sketch_sent {
                     for &nb in topology.neighbors(replica_id) {
                         network.send(
@@ -488,28 +536,31 @@ impl Protocol for MultiReplicaV2Protocol {
                     }
                 }
             } else {
-                // Star leaves + Tree: decode neighbor sketches; handle BF request from hub.
-                let mut sketch_results: Vec<(usize, HashSet<u64>)> = Vec::new();
+                // Star leaves + Tree: decode neighbor sketches; handle BF requests.
+                // For Tree: higher-id decodes lower-id's sketch → b_only→pending,
+                //           a_only→chord_pending_requests (sent as BF request next round).
+                // For Star leaves: receives BF request from hub (BloomDigests path).
+                let mut sketch_results: Vec<(usize, HashSet<u64>, Vec<u64>)> = Vec::new();
                 let mut bf_request_results: Vec<(usize, Vec<Element>)> = Vec::new();
 
                 for (from, msg, hint) in inbox {
                     if let ProtocolMsg::RatelessBloom { .. } = msg {
                         match hint {
                             SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
-                                let (local_only, _) = decode_bf_sketch(
+                                let (b_only, a_only) = decode_bf_sketch(
                                     replica_id,
                                     digests,
                                     bloom_bits,
                                     &local_digests,
                                     network,
                                 );
-                                sketch_results.push((from, local_only.into_iter().collect()));
+                                sketch_results.push((from, b_only.into_iter().collect(), a_only));
                             }
                             SimulatorHint::BloomDigests {
                                 digests,
                                 false_positive_rate,
                             } => {
-                                // BF request from Star hub: send back matching local elements.
+                                // BF request: send back matching local elements.
                                 let mut bf: BloomFilter<u64> =
                                     BloomFilter::new(digests.len().max(1), false_positive_rate);
                                 for &d in &digests {
@@ -530,7 +581,8 @@ impl Protocol for MultiReplicaV2Protocol {
                 }
 
                 let state = self.state.entry(replica_id).or_default();
-                for (from, missing_set) in sketch_results {
+                for (from, missing_set, a_only) in sketch_results {
+                    // b_only: queue elements to send to sketcher
                     let to_send: Vec<Element> = {
                         let sent = state.sent_to.entry(from).or_default();
                         next_set
@@ -541,6 +593,14 @@ impl Protocol for MultiReplicaV2Protocol {
                     };
                     if !to_send.is_empty() {
                         state.pending.entry(from).or_default().extend(to_send);
+                    }
+                    // a_only: request from sketcher via BF next round (Tree only; no-op for Star leaves)
+                    if !a_only.is_empty() {
+                        state
+                            .chord_pending_requests
+                            .entry(from)
+                            .or_default()
+                            .extend(a_only);
                     }
                 }
                 for (from, elements) in bf_request_results {
