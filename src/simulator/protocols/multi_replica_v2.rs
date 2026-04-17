@@ -188,7 +188,7 @@ impl Protocol for MultiReplicaV2Protocol {
                         );
                     }
                 }
-                const REQUEST_FPR: f64 = 0.01;
+                const REQUEST_FPR: f64 = 0.001;
                 let requests = std::mem::take(&mut state.chord_pending_requests);
                 for (nb, digests) in requests {
                     if !digests.is_empty() {
