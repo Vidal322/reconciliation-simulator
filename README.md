@@ -127,6 +127,46 @@ Emits one JSON document on stdout with per-run entries and a summary
 cargo test
 ```
 
+### Runtime
+
+Wall-clock time for one `eval` invocation of `FullStateTransfer` (3 seeds
+per cell, binary pre-built, measured on the current host). `MultiReplica`
+currently is the FST scaffold, so these are representative of the agent's
+per-iteration cost before it improves the protocol.
+
+| Replicas | Star   | Tree    | Chord   | Total (3 topologies) |
+|----------|--------|---------|---------|----------------------|
+| 16       |  0.8 s |  2.5 s  |  1.6 s  |   ~4.9 s             |
+| 32       |  2.1 s |  8.5 s  |  9.5 s  |  ~20.1 s             |
+| 64       |  6.1 s | 34.0 s  | 37.0 s  |  ~77.1 s             |
+
+`cargo test` adds ~1.3 s when the build is warm. At the default `n=32`
+workload, one agent iteration (test + eval across 3 topologies × 3 seeds)
+costs ~21 s. Scaling is roughly O(n²): FST sends every element to every
+neighbour. Tree and Chord dominate because they have more edges and larger
+diameter than Star. Sketch-based protocols are faster — once the agent
+moves `MultiReplica` away from the scaffold, iteration time should drop.
+
+#### Estimate: full evaluation matrix
+
+A thesis-scale sweep (3 seeds × 3 replica counts × 3 topologies × 3
+similarity levels = 81 simulations per iteration) costs roughly:
+
+| Component               | Time    |
+|-------------------------|---------|
+| `cargo test`            |  ~1 s   |
+| n=16, all topos, 3 Js   |  ~14 s  |
+| n=32, all topos, 3 Js   |  ~59 s  |
+| n=64, all topos, 3 Js   | ~227 s  |
+| **Total per iteration** | **~5 min** |
+
+The J factor is empirical: at n=32 Tree, FST takes 12.1 s / 8.9 s / 5.2 s
+at J = 0.25 / 0.5 / 0.75 — a 2.9× multiplier over a single J level,
+because lower similarity means a larger union and more rounds to converge.
+A night of unattended iteration (~8 h) therefore buys ~95 agent attempts
+at the full matrix; a full day (\~24 h) buys \~290. Sketch-based protocols
+should cut this substantially once `MultiReplica` moves off the scaffold.
+
 ---
 
 ## The `bandwidth-researcher` agent
