@@ -1,118 +1,122 @@
 # Strategy Hints for Bandwidth Researcher Agent
 
-## Workload context
+## Current state (after 13 experiments)
 
-32 replicas, 10,000 elements each, Jaccard similarity 0.5, 200k universe.
-Each pair shares ~6,667 elements and each has ~3,333 unique. Union ~66,002.
+Best fitness: **260,060,241** (attempt 12).
+- Star: 77.5M (3 rounds) — near theoretical minimum (~73M)
+- Tree: 77.5M (10 rounds) — near theoretical minimum
+- Chord: 105.0M (10 rounds) — **40% of total, main target**
 
----
-
-## What we know from 11 experiments so far
-
-Current best: **260.6M** (attempt 7). Star=77.8M, Tree=77.7M, Chord=105.1M.
-HybridRbfRiblt baseline: 537M. We are **51% below** the best reference.
-
-### What works
-
-1. **Star/Tree: single BF+RIBLT sketch + eager forwarding** — one sketch
-   in round 1, then forward all newly received elements to all neighbors
-   with `sent_to` dedup. Converges in 3 rounds (Star) / 10 rounds (Tree).
-   Delivers ~78M per topology. This is essentially solved.
-
-2. **Chord: sequential distance-doubling** — instead of sketching all 5
-   neighbors every round, sketch only the pair at distance 2^power each
-   round (power cycles 0→4). This means each directed edge is sketched
-   exactly once, reducing decode events from 864 to 288. Chord went from
-   276M to 105M in one step. Ascending order (close→far) is essential:
-   reconcile nearby first so their elements help when reconciling distant.
-
-3. **BF+RIBLT hybrid for Chord** — at 50% Jaccard, BF pre-filtering helps
-   even on Chord. chord_m_ratio=1.0 is optimal (tested 0.7 and 1.3).
-
-### What does NOT work at 32 nodes
-
-- **Hash-based forwarder selection for Chord** (attempt 2): the designated
-  forwarder may not have the element yet → Chord fails to converge even
-  at 100 rounds. DO NOT retry this approach.
-- **Source-neighbor-suppressed eager forwarding for Chord** (attempt 4):
-  cascade still too strong, state bytes doubled. Eager forwarding on
-  32-node Chord is fundamentally problematic — too many paths.
-- **Descending power order** for Chord (attempt 10): 186M vs 105M ascending.
-  Close-first is essential for element accumulation.
-- **chord_m_ratio tuning** around 1.0 (attempts 8-9): insensitive. 0.7 and
-  1.3 both give ~105M. Don't waste experiments on fine BF tuning.
+We are **51.6% below HybridRbfRiblt** (537M).
 
 ---
 
-## Where the remaining opportunity is
+## What we know works
 
-Star (78M) and Tree (78M) seem near-optimal. **Chord (105M) is 40% of the
-total** and the main target. Current Chord breakdown (approximate):
-- State bytes: ~70M (actual elements transferred)
-- Metadata bytes: ~35M (BF + RIBLT sketches)
+- **Star/Tree**: single BF+RIBLT sketch (m_ratio=1.0) + eager forwarding. Solved.
+- **Chord**: sequential distance-doubling (power 0→4, ascending). BF+RIBLT
+  hybrid with chord_m_ratio=1.0. Pairwise, no eager forwarding.
 
-### Ideas to explore for Chord
+## What we know FAILS — do NOT retry
 
-#### 1. Selective eager forwarding after distance-doubling
-Currently Chord does NO eager forwarding (it was disabled because naive
-forwarding cascades). But after completing the distance-doubling cycle
-(5 rounds), most nodes have most elements. A final selective forward
-round — only send elements to neighbors whose set size is smaller — might
-converge stragglers cheaply without cascading.
+- **Hash-based forwarder for Chord** (attempt 2): fails to converge
+- **Eager forwarding on Chord** (attempts 1, 4): cascade storms, doubles bandwidth
+- **Descending power order** (attempt 10): 77% worse, ascending is essential
+- **chord_m_ratio tuning** (attempts 8-9): 0.7 and 1.3 both ≈105M, insensitive
+- **Pure RIBLT for Chord** (attempt 11): 10% worse than BF+RIBLT. BF
+  pre-filtering is essential at 50% Jaccard.
+- **Skip re-sketch if unchanged** (attempt 6): condition never fires
 
-#### 2. Skip redundant sketch rounds
-After the distance-doubling cycle completes (power 0→4, covering distances
-1,2,4,8,16), a second cycle of 5 sketch rounds starts. By then the sets
-are highly similar. Consider: after the first cycle, switch to direct
-element transfer for remaining diffs (< 100 elements per pair), skipping
-the BF+RIBLT overhead entirely.
+---
 
-#### 3. BF-skip on Chord
-If a node's set hasn't grown since its last sketch to a specific neighbor,
-skip that sketch. Attempt 6 tried this but the condition never fired because
-sets always grow during the first cycle. Try it only for the SECOND cycle
-(power >= 5).
+## Priority ideas to try (Chord-focused)
 
-#### 4. Combine distance-doubling with limited eager forwarding
-Instead of fully disabling eager forwarding on Chord, enable it but only
-for the first round (power 0, distance 1). After the closest neighbors
-reconcile, forward elements received from them to distance-2 neighbors.
-This pre-loads distant neighbors before their sketch round, reducing the
-sketch diff size.
+### 1. Asymmetric / unidirectional sketch (HIGH PRIORITY)
 
-#### 5. Reduce metadata per sketch
-Each BF+RIBLT sketch at m_ratio=1.0 costs ~10k bits BF + RIBLT symbols.
-Consider:
-- Use pure RIBLT (no BF) for the close neighbors (power 0-1) where the
-  diff is largest and BF overhead is relatively small
-- Use BF+RIBLT for distant neighbors (power 3-4) where prior rounds have
-  already reduced the diff and BF is very effective
+Currently both A→B and B→A sketch simultaneously on each Chord edge.
+Each direction incurs full BF+RIBLT metadata cost. Instead:
 
-#### 6. Asymmetric sketch: only one direction per round
-Currently both A→B and B→A sketch simultaneously. If A sketches to B in
-round N, B learns what A has. B can then send missing elements to A in
-round N+1 WITHOUT sketching back. This halves the metadata.
+- **Round N**: A sends sketch to B only (not B→A).
+- B decodes, learns what A has that B doesn't, and vice versa.
+- **Round N+1**: B sends A the missing elements. A sends B the missing
+  elements. No sketch needed for B→A — B already decoded the diff.
 
-### Ideas for Star/Tree (incremental improvements)
+This could **halve the metadata** on Chord (~35M → ~17M), saving ~18M.
+The key insight: when B decodes A's sketch, B learns BOTH directions of
+the diff (local_only AND remote_only). B can immediately queue elements
+for A without A ever sketching to B.
 
-#### 7. Tree: directed upward then downward
-Currently Tree uses the same strategy as Star (sketch all neighbors round 1,
-then eager forward). A directed approach might save some bytes:
-- Upward: children sketch to parent only (not bidirectional)
-- Downward: root pushes missing elements to children
-This avoids redundant sibling-to-parent-to-sibling forwarding.
+Implementation: in the distance-doubling loop, for each power, only send
+the sketch in ONE direction (e.g., lower-id → higher-id). The receiver
+decodes both local_only (queue for sender) and the sender's missing
+elements (already in pending from decode). The sender gets elements back
+in the next element-drain round without having sent its own sketch.
 
-#### 8. Star: hub-aware element distribution
-The hub receives sketches from all 31 leaves in round 1. It knows exactly
-what each leaf has. Instead of eager-forwarding everything, the hub could
-send each leaf only what it's missing — no dedup overhead, no wasted sends.
+### 2. Direct element transfer after first cycle (HIGH PRIORITY)
+
+After the first distance-doubling cycle (powers 0-4, 10 rounds), most
+nodes have most elements. The remaining diffs per pair are tiny (maybe
+< 50 elements). Starting a SECOND cycle of BF+RIBLT sketches is wasteful —
+the fixed BF overhead (~10KB per sketch) exceeds the cost of just sending
+the remaining elements directly.
+
+Implementation: after `chord_sketch_power >= 5`, switch to a cleanup mode:
+- Each node sends all its elements as digests (8B each) to neighbors
+- Neighbors compare and request only missing elements
+- Or simply broadcast remaining new elements (since last round) directly
+
+This could save 1-2 rounds of unnecessary BF+RIBLT overhead.
+
+### 3. Skip sketch to already-converged neighbors
+
+Track the set size reported by each neighbor (via elements received).
+If a neighbor's set appears to match yours (same size, no new elements
+exchanged in the last round), skip the sketch to that neighbor.
+
+This is different from attempt 6 which checked OUR set size. Here we
+check the PAIR's convergence state.
+
+### 4. Combine distance-doubling with limited post-cycle forwarding
+
+After the first distance-doubling cycle (5 sketch rounds), enable a
+single round of eager forwarding ONLY for elements received in the last
+sketch round. This is limited (not all accumulated elements, just the
+latest batch) so it won't cascade, but it reaches nodes that may still
+be missing a few elements, potentially avoiding a second sketch cycle.
+
+### 5. Reduce metadata per sketch with adaptive m_ratio per power
+
+All 5 distance-doubling rounds use the same m_ratio=1.0. But:
+- Power 0 (distance 1, close neighbors): diff is largest → BF is most
+  valuable → m_ratio=1.0 or higher is good
+- Power 4 (distance 16, far neighbors): prior rounds have reduced the
+  diff significantly → BF overhead may exceed savings → try lower m_ratio
+  (0.5) or even pure RIBLT for power 4 only
+
+Note: attempt 11 tried pure RIBLT for powers 1-4 and it was worse.
+But pure RIBLT for ONLY power 4 (smallest remaining diff) might help.
+
+---
+
+## Lower priority ideas
+
+### 6. Tree: directed upward-downward flow
+Tree is at 77.5M in 10 rounds. A directed approach (children→parent upward,
+root→children downward) might save some bytes by avoiding redundant sibling
+forwarding. Small gain expected (~2-5M).
+
+### 7. Star: skip hub's outbound sketch
+The hub receives sketches from all 31 leaves and decodes the full union.
+The hub doesn't need to send its OWN sketch — it can just send the missing
+elements directly to each leaf based on what it decoded. Saves 31 sketch
+messages from hub.
 
 ---
 
 ## General principles
 
-- **Chord is the bottleneck.** Focus experiments there.
+- **Chord is the bottleneck at 105M (40% of total).** Focus there.
 - **Rounds are cheap (cap=100), bytes are expensive.**
-- **Test one thing at a time.** Log failures with `kept: no`.
-- **Don't retry failed approaches** — check experiments.tsv first.
-- **Star/Tree are near-optimal at ~78M** — small gains possible but not the priority.
+- **Log every attempt** (success AND failure) with `kept: yes/no`.
+- **Check experiments.tsv before each attempt** to avoid retrying failed ideas.
+- **Test one thing at a time.** Isolate changes.
