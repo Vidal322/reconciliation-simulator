@@ -471,8 +471,12 @@ impl Protocol for MultiReplicaV2Protocol {
             if is_star_hub {
                 // Star hub: decode leaf sketches → b_only→pending, a_only→requests.
                 // Eager-forward elements received from leaves to other leaves.
+                // Dedup a_only across leaves: each missing element is requested from
+                // exactly ONE leaf (the first processed that has it), avoiding
+                // duplicate responses when multiple leaves share an element hub lacks.
                 let mut pending_updates: Vec<(usize, Vec<Element>)> = Vec::new();
                 let mut request_updates: Vec<(usize, Vec<u64>)> = Vec::new();
+                let mut already_requested: HashSet<u64> = HashSet::new();
 
                 for (from, msg, hint) in inbox {
                     match (msg, hint) {
@@ -496,8 +500,13 @@ impl Protocol for MultiReplicaV2Protocol {
                             if !to_send.is_empty() {
                                 pending_updates.push((from, to_send));
                             }
-                            if !a_only.is_empty() {
-                                request_updates.push((from, a_only));
+                            // Only request elements not yet requested from another leaf.
+                            let new_requests: Vec<u64> = a_only
+                                .into_iter()
+                                .filter(|d| already_requested.insert(*d))
+                                .collect();
+                            if !new_requests.is_empty() {
+                                request_updates.push((from, new_requests));
                             }
                         }
                         _ => {}
