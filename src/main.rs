@@ -1,4 +1,3 @@
-#![allow(unused)]
 use reconciliation_simulator::simulator;
 
 use simulator::engine::{Simulation, SimulationConfig, SimulationResult};

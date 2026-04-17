@@ -4,7 +4,7 @@ use std::{
     hash::Hash,
 };
 
-use rand::{SeedableRng, prelude::IndexedRandom, seq::SliceRandom};
+use rand::{SeedableRng, prelude::IndexedRandom};
 
 use crate::simulator::algorithms::bayesian_estimation;
 

@@ -8,9 +8,7 @@ use crate::simulator::algorithms::rateless_bloom::{RatelessBF, StoppingStrategyF
 use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::{RecvView, SendView};
 use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
-use crate::simulator::protocols::{
-    LocalMetrics, Protocol, ProtocolStepResult, ProtocolKind,
-};
+use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolKind, ProtocolStepResult};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
@@ -66,7 +64,7 @@ impl HybridRbfRibltProtocol {
         requested.max(minimum_for_nonzero_threshold)
     }
 
-    fn effective_m_ratio(&self, bloom_bits: usize, n: usize) -> f64 {
+    fn effective_m_ratio(bloom_bits: usize, n: usize) -> f64 {
         bloom_bits as f64 / n.max(1) as f64
     }
 }
@@ -135,27 +133,25 @@ impl Protocol for HybridRbfRibltProtocol {
             match msg {
                 ProtocolMsg::RatelessBloom { .. } => {
                     let (sender_digests, bloom_bits) = match hint {
-                        SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
-                            (digests, bloom_bits)
-                        }
+                        SimulatorHint::RatelessBloomDigests {
+                            digests,
+                            bloom_bits,
+                        } => (digests, bloom_bits),
                         _ => panic!("expected RatelessBloomDigests hint"),
                     };
 
                     // Rebuild the sender's RatelessBF from its digests.
-                    let mut sender_filter =
-                        RatelessBF::new(sender_digests.clone(), bloom_bits);
+                    let mut sender_filter = RatelessBF::new(sender_digests.clone(), bloom_bits);
 
                     let effective_m_ratio =
-                        bloom_bits as f64 / sender_digests.len().max(1) as f64;
+                        Self::effective_m_ratio(bloom_bits, sender_digests.len());
 
                     // Create stopping strategy with OUR digests as the
                     // elements to be tested against the sender's filter.
-                    let local_digests: Vec<u64> =
-                        local.set.iter().map(|e| e.digest).collect();
+                    let local_digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
 
-                    let stopping_strategy =
-                        ExpectedCostFactory::new(effective_m_ratio)
-                            .create(local_digests, sender_digests.len());
+                    let stopping_strategy = ExpectedCostFactory::new(effective_m_ratio)
+                        .create(local_digests, sender_digests.len());
 
                     let (common, definitely_missing) =
                         sender_filter.extend_until(stopping_strategy);
@@ -168,30 +164,21 @@ impl Protocol for HybridRbfRibltProtocol {
 
                     // definitely_missing: our digests that the sender
                     // definitely doesn't have → we should send these.
-                    let mut recovered_local_only: Vec<u64> =
-                        definitely_missing;
+                    let mut recovered_local_only: Vec<u64> = definitely_missing;
 
                     // Resolve the ambiguous subset via RIBLT.
                     if !common.is_empty() {
-                        let mut sender_riblt =
-                            RatelessIBLT::riblt_from(sender_digests);
-                        let mut common_riblt =
-                            RatelessIBLT::riblt_from(common);
+                        let mut sender_riblt = RatelessIBLT::riblt_from(sender_digests);
+                        let mut common_riblt = RatelessIBLT::riblt_from(common);
 
-                        let sketch_len = sender_riblt
-                            .find_all_differences(&mut common_riblt);
+                        let sketch_len = sender_riblt.find_all_differences(&mut common_riblt);
 
-                        let riblt_meta =
-                            (sketch_len * mem::size_of::<u64>()) as u64;
-                        network.record_decoded_metadata(
-                            replica_id,
-                            riblt_meta,
-                        );
+                        let riblt_meta = (sketch_len * mem::size_of::<u64>()) as u64;
+                        network.record_decoded_metadata(replica_id, riblt_meta);
                         encode_time += sender_riblt.t_enc();
                         decode_time += sender_riblt.t_dec();
 
-                        let riblt_local_only =
-                            sender_riblt.get_remote_only_symbols();
+                        let riblt_local_only = sender_riblt.get_remote_only_symbols();
                         false_matches += riblt_local_only.len();
                         recovered_local_only.extend(riblt_local_only);
                     }
@@ -206,11 +193,7 @@ impl Protocol for HybridRbfRibltProtocol {
                         .cloned()
                         .collect();
                     if !to_send.is_empty() {
-                        state
-                            .pending
-                            .entry(from)
-                            .or_default()
-                            .extend(to_send);
+                        state.pending.entry(from).or_default().extend(to_send);
                     }
                 }
                 ProtocolMsg::Elements(els) => {

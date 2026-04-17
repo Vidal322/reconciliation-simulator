@@ -1,5 +1,5 @@
 use crate::simulator::algorithms::bayesian_estimation;
-use rand::{SeedableRng, prelude::IndexedRandom, seq::SliceRandom};
+use rand::{SeedableRng, prelude::IndexedRandom};
 use std::{
     cmp::{max, min},
     collections::HashSet,
