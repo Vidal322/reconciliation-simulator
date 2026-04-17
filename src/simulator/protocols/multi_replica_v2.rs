@@ -55,6 +55,9 @@ fn decode_bf_sketch(
 ///   double the bandwidth.
 pub struct MultiReplicaV2Protocol {
     m_ratio: f64,
+    /// Higher m_ratio for Chord: 50% Jaccard → large diffs → need lower BF FPR
+    /// to reduce RIBLT false-positive overhead.
+    chord_m_ratio: f64,
     state: HashMap<usize, ReplicaState>,
 }
 
@@ -71,12 +74,14 @@ impl MultiReplicaV2Protocol {
     pub fn new() -> Self {
         Self {
             m_ratio: 0.5,
+            chord_m_ratio: 1.0,
             state: HashMap::new(),
         }
     }
 
-    fn bloom_bits_for(&self, n: usize) -> usize {
-        let requested = ((n as f64) * self.m_ratio).ceil().max(1.0) as usize;
+    fn bloom_bits_for(&self, n: usize, is_chord: bool) -> usize {
+        let ratio = if is_chord { self.chord_m_ratio } else { self.m_ratio };
+        let requested = ((n as f64) * ratio).ceil().max(1.0) as usize;
         let minimum = RATELESS_SET_RECONCILIATION_OVERHEAD * 8;
         requested.max(minimum)
     }
@@ -96,7 +101,7 @@ impl Protocol for MultiReplicaV2Protocol {
     ) {
         // Compute sketch params before taking the state borrow.
         let local_digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
-        let bloom_bits = self.bloom_bits_for(local_digests.len());
+        let bloom_bits = self.bloom_bits_for(local_digests.len(), topology.kind == TopologyKind::Chord);
 
         let state = self.state.entry(replica_id).or_default();
 
