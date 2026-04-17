@@ -21,7 +21,10 @@ Repeat indefinitely:
 3. **Edit** `src/simulator/protocols/multi_replica_v2.rs` (the only file you may edit).
 4. **Commit** your change: `git add src/simulator/protocols/multi_replica_v2.rs && git commit -m "<short description of what you tried>"`.
 5. **Evaluate**: `cargo test 2>/dev/null && cargo run --release -- --protocol MultiReplicaV2 --json 2>/dev/null`.
-6. **Record** the result: append one line to `experiments.tsv` (see format below).
+6. **Record** the result: **ALWAYS** append one line to `experiments.tsv` (see format below).
+   **You MUST log every attempt — both successes AND failures.** Failed
+   attempts with `kept: no` are essential memory to avoid re-exploring dead
+   ends. If the build or tests fail, log fitness as 999999999.
 7. **Decide**:
    - If all three topologies converge AND the scalar fitness improved, **keep** the commit.
    - Otherwise, **revert**: `git revert --no-edit HEAD`.
