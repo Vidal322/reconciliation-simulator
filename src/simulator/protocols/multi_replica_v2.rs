@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::mem;
 
+use crate::simulator::algorithms::bloom::BloomFilter;
 use crate::simulator::algorithms::rateless_bloom::bayesian_cost::RATELESS_SET_RECONCILIATION_OVERHEAD;
 use crate::simulator::algorithms::rateless_bloom::expected_cost::ExpectedCostFactory;
 use crate::simulator::algorithms::rateless_bloom::{RatelessBF, StoppingStrategyFactory};
@@ -159,7 +160,9 @@ impl Protocol for MultiReplicaV2Protocol {
                     }
                 }
             } else if step == 1 {
-                // Higher-id drains b-only to lower-id + sends request for a-only.
+                // Higher-id drains b-only to lower-id + sends BF-encoded request for a-only.
+                // BF billing (~9.6 bits/element at FPR=1%) is ~6.7× cheaper than raw digest
+                // list (64 bits/element via RibltSketch).
                 let pending = std::mem::take(&mut state.pending);
                 for (nb, elements) in pending {
                     if !elements.is_empty() {
@@ -171,15 +174,22 @@ impl Protocol for MultiReplicaV2Protocol {
                         );
                     }
                 }
+                const REQUEST_FPR: f64 = 0.01;
                 let requests = std::mem::take(&mut state.chord_pending_requests);
                 for (nb, digests) in requests {
                     if !digests.is_empty() {
-                        let n_symbols = digests.len();
+                        let bf_byte_len = {
+                            let tmp: BloomFilter<u64> = BloomFilter::new(digests.len(), REQUEST_FPR);
+                            tmp.byte_len()
+                        };
                         network.send(
                             replica_id,
                             nb,
-                            ProtocolMsg::RibltSketch { symbols: n_symbols },
-                            SimulatorHint::RibltDigests { digests },
+                            ProtocolMsg::RatelessBloom { byte_len: bf_byte_len },
+                            SimulatorHint::BloomDigests {
+                                digests,
+                                false_positive_rate: REQUEST_FPR,
+                            },
                         );
                     }
                 }
@@ -258,22 +268,16 @@ impl Protocol for MultiReplicaV2Protocol {
             let mut request_updates: Vec<(usize, Vec<u64>)> = Vec::new();
 
             for (from, msg, hint) in inbox {
-                match msg {
-                    ProtocolMsg::RatelessBloom { .. } => {
-                        let (sender_digests, bloom_bits) = match hint {
-                            SimulatorHint::RatelessBloomDigests { digests, bloom_bits } => {
-                                (digests, bloom_bits)
-                            }
-                            _ => panic!("expected RatelessBloomDigests hint"),
-                        };
+                match (msg, hint) {
+                    (ProtocolMsg::RatelessBloom { .. }, SimulatorHint::RatelessBloomDigests { digests, bloom_bits }) => {
+                        // Sketch from lower-id: decode BF+RIBLT to learn b-only and a-only.
                         let (b_only, a_only) = decode_bf_sketch(
                             replica_id,
-                            sender_digests,
+                            digests,
                             bloom_bits,
                             &local_digests,
                             network,
                         );
-                        // b-only: elements we have that sender lacks → queue to send back.
                         let b_only_set: HashSet<u64> = b_only.into_iter().collect();
                         let to_send: Vec<Element> = next_set
                             .iter()
@@ -283,20 +287,20 @@ impl Protocol for MultiReplicaV2Protocol {
                         if !to_send.is_empty() {
                             pending_updates.push((from, to_send));
                         }
-                        // a-only: elements sender has that we lack → request them.
                         if !a_only.is_empty() {
                             request_updates.push((from, a_only));
                         }
                     }
-                    ProtocolMsg::RibltSketch { .. } => {
-                        // Request message: find elements matching requested digests.
-                        let requested_digests = match hint {
-                            SimulatorHint::RibltDigests { digests } => digests,
-                            _ => panic!("expected RibltDigests hint for RibltSketch request"),
-                        };
-                        let to_send: Vec<Element> = requested_digests
+                    (ProtocolMsg::RatelessBloom { .. }, SimulatorHint::BloomDigests { digests, false_positive_rate }) => {
+                        // BF request from higher-id: build BF, query local elements (simulates FPR).
+                        let mut bf: BloomFilter<u64> = BloomFilter::new(digests.len().max(1), false_positive_rate);
+                        for &d in &digests {
+                            bf.insert(&d);
+                        }
+                        let to_send: Vec<Element> = next_set
                             .iter()
-                            .filter_map(|d| local_by_digest.get(d).cloned())
+                            .filter(|e| bf.contains(&e.digest))
+                            .cloned()
                             .collect();
                         if !to_send.is_empty() {
                             pending_updates.push((from, to_send));
