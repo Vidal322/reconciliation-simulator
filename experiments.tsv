@@ -1,2 +1,24 @@
 attempt	fitness	star_bytes	tree_bytes	chord_bytes	star_rounds	tree_rounds	chord_rounds	kept	description
 0	2194909120	122800560	887229040	1184879520	2	9	3	yes	baseline: full-state-transfer scaffold at n=32, J=0.5, round_cap=100
+1	725524763	77758187	77736575	570030001	3	10	4	yes	hybrid BF+RIBLT single sketch + eager forwarding; Star/Tree beat baselines but Chord cascades badly
+2	999999999	77757603	77730942	102701444	3	10	100	no	hash-based forwarder selection for Chord (1/degree designated); Chord fails to converge
+3	438805808	77764276	77732547	283308985	3	10	6	yes	pairwise Chord (like HybridRbfRiblt) + eager-forward Star/Tree; beats HybridRbfRiblt total
+4	554902269	77755540	77732884	399413845	3	10	4	no	source-neighbor-suppressed eager fwd for Chord; cascade still too strong
+5	431520654	77765090	77725574	276029990	3	10	6	yes	chord_m_ratio=1.0 reduces BF false-positive rate; Chord metadata 88M->81M
+6	431549257	77751703	77726950	276071304	3	10	6	no	skip Chord re-sketch if set unchanged; condition never fires
+7	260602556	77756649	77734530	105111377	3	10	10	yes	sequential distance-doubling for Chord (powers 0-4); Chord 276M->105M
+8	261277790	77759449	77731057	105786284	3	10	10	no	chord_m_ratio=0.7; slightly worse than 1.0
+9	261276380	77757129	77733873	105132380	3	10	10	no	chord_m_ratio=1.3; essentially same as 1.0
+10	521138935	77762921	77728972	186647042	3	10	10	no	descending Chord power order (4->0); ascending order essential
+11	271831275	77760921	77728806	116341548	3	10	10	no	pure RIBLT for Chord powers 1-4; RIBLT bills full bidirectional sym_diff
+12	260060241	77514782	77498136	105047323	3	10	10	yes	m_ratio=1.0 for Star/Tree; fewer BF layers saves 540K bytes
+13	253259817	77522956	77504822	98232039	3	10	15	yes	asymmetric Chord sketch: lower-id sketches only; Chord 105M->98.2M
+14	248508900	77530300	77507914	93470686	3	10	15	yes	BF-encoded Chord a-only request; saves 6.45M metadata
+15	248257881	77522120	77505824	93229937	3	10	15	yes	pure RIBLT for Chord power 4; saves BF overhead vs small diff
+16	247284914	77522032	77500512	92262370	3	10	15	yes	BF request FPR 1%->0.1%; net 0.97M savings
+17	246097272	76309651	77509538	92278083	4	10	15	yes	asymmetric Star hub: skip hub outbound sketch; Star 77.5M->76.3M
+18	248925176	76306507	77498058	95120611	4	10	15	no	pure RIBLT for Chord power 3; diff too large, worse
+19	244869630	76303667	76283177	92282786	4	10	15	yes	asymmetric Tree edges; Tree 77.5M->76.3M
+20	243294861	74720651	76285715	92288495	4	10	15	yes	Star hub dedup a_only: request each missing element from one leaf only
+21	243268431	74714011	76283793	92270627	4	10	15	yes	Tree dedup a_only across lower-id neighbors; tiny 26KB savings
+22	241541575	73206575	76053505	92281495	4	10	15	yes	skip eager-forward to neighbors known to already have element
