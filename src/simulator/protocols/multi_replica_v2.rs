@@ -49,11 +49,10 @@ fn decode_bf_sketch(
 ///   Elements propagate across the network in O(depth) rounds without
 ///   further sketch overhead.
 ///
-/// Chord: pairwise BF+RIBLT backbone + source-neighbor-suppressed eager
-///   forwarding.  When receiving element E from neighbor A, forward to
-///   neighbor B only if A is NOT a direct neighbor of B (since B would
-///   otherwise receive E from A via pairwise sketch directly).  This
-///   accelerates multi-hop propagation without full cascade storms.
+/// Chord: pairwise BF+RIBLT, like HybridRbfRiblt.  Repeated sketch→element
+///   cycles because Chord's diameter requires multi-hop propagation and
+///   naive eager flooding causes O(degree) cascade storms that more than
+///   double the bandwidth.
 pub struct MultiReplicaV2Protocol {
     m_ratio: f64,
     state: HashMap<usize, ReplicaState>,
@@ -62,7 +61,7 @@ pub struct MultiReplicaV2Protocol {
 #[derive(Default)]
 struct ReplicaState {
     pending: HashMap<usize, Vec<Element>>,
-    /// Dedup gate for eager-forward (both Star/Tree and Chord).
+    /// Dedup gate for Star/Tree eager-forward path only.
     sent_to: HashMap<usize, HashSet<u64>>,
     /// One-shot sketch flag for Star/Tree.
     sketch_sent: bool,
@@ -169,16 +168,13 @@ impl Protocol for MultiReplicaV2Protocol {
         let mut next_set = local.snapshot_set();
 
         if topology.kind == TopologyKind::Chord {
-            // ── Chord: pairwise backbone + source-neighbor-suppressed eager fwd ─
+            // ── Chord: pairwise, no eager forwarding ─────────────────────────
 
-            // Pass 1: merge received elements, track what's new and from whom.
-            let mut newly_received: Vec<(Element, usize)> = Vec::new();
-            for (from, msg, _) in &inbox {
+            // Pass 1: merge received elements.
+            for (_, msg, _) in &inbox {
                 if let ProtocolMsg::Elements(els) = msg {
                     for el in els {
-                        if next_set.insert(el.clone()) {
-                            newly_received.push((el.clone(), *from));
-                        }
+                        next_set.insert(el.clone());
                     }
                 }
             }
@@ -214,31 +210,6 @@ impl Protocol for MultiReplicaV2Protocol {
             let state = self.state.entry(replica_id).or_default();
             for (from, to_send) in pending_updates {
                 state.pending.entry(from).or_default().extend(to_send);
-            }
-
-            // Source-neighbor-suppressed eager forwarding for Chord:
-            // Forward element E (received from A) to neighbor B only if
-            // A is NOT a direct neighbor of B — if A IS B's neighbor, B
-            // will receive E from A directly via pairwise sketch.
-            let neighbors: Vec<usize> = topology.neighbors(replica_id).to_vec();
-            for (element, from_nb) in &newly_received {
-                for &nb in &neighbors {
-                    if nb == *from_nb {
-                        continue;
-                    }
-                    // Suppress if from_nb is a direct neighbor of nb
-                    // (nb will get this element from from_nb via pairwise sketch)
-                    if topology.is_neighbor(*from_nb, nb) {
-                        continue;
-                    }
-                    let queued = {
-                        let sent = state.sent_to.entry(nb).or_default();
-                        sent.insert(element.digest)
-                    };
-                    if queued {
-                        state.pending.entry(nb).or_default().push(element.clone());
-                    }
-                }
             }
         } else {
             // ── Star/Tree: single sketch + eager forwarding ──────────────────
