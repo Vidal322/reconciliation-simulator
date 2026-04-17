@@ -590,6 +590,10 @@ impl Protocol for MultiReplicaV2Protocol {
                 }
 
                 let state = self.state.entry(replica_id).or_default();
+                // Dedup a_only: if multiple lower-id neighbors have an element this
+                // node lacks, request from only the first one processed (avoids
+                // receiving duplicate copies via parallel BF responses).
+                let mut already_requested: HashSet<u64> = HashSet::new();
                 for (from, missing_set, a_only) in sketch_results {
                     // b_only: queue elements to send to sketcher
                     let to_send: Vec<Element> = {
@@ -604,12 +608,16 @@ impl Protocol for MultiReplicaV2Protocol {
                         state.pending.entry(from).or_default().extend(to_send);
                     }
                     // a_only: request from sketcher via BF next round (Tree only; no-op for Star leaves)
-                    if !a_only.is_empty() {
+                    let new_a_only: Vec<u64> = a_only
+                        .into_iter()
+                        .filter(|d| already_requested.insert(*d))
+                        .collect();
+                    if !new_a_only.is_empty() {
                         state
                             .chord_pending_requests
                             .entry(from)
                             .or_default()
-                            .extend(a_only);
+                            .extend(new_a_only);
                     }
                 }
                 for (from, elements) in bf_request_results {
