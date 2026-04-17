@@ -129,6 +129,8 @@ impl Protocol for MultiReplicaV2Protocol {
 
             if step == 0 {
                 // Asymmetric sketch: only lower-id → higher-id.
+                // At power 4 (large sets, small diff), pure RIBLT is cheaper than BF+RIBLT
+                // because BF overhead scales with set size, not diff size.
                 let targets: Vec<usize> = if forward == backward {
                     vec![forward]
                 } else {
@@ -136,15 +138,27 @@ impl Protocol for MultiReplicaV2Protocol {
                 };
                 for nb in targets {
                     if topology.is_neighbor(replica_id, nb) && replica_id < nb {
-                        network.send(
-                            replica_id,
-                            nb,
-                            ProtocolMsg::RatelessBloom { byte_len: 0 },
-                            SimulatorHint::RatelessBloomDigests {
-                                digests: local_digests.clone(),
-                                bloom_bits,
-                            },
-                        );
+                        if power == 4 {
+                            // Pure RIBLT sketch: billed at receiver via record_decoded_metadata.
+                            network.send(
+                                replica_id,
+                                nb,
+                                ProtocolMsg::RibltSketch { symbols: 0 },
+                                SimulatorHint::RibltDigests {
+                                    digests: local_digests.clone(),
+                                },
+                            );
+                        } else {
+                            network.send(
+                                replica_id,
+                                nb,
+                                ProtocolMsg::RatelessBloom { byte_len: 0 },
+                                SimulatorHint::RatelessBloomDigests {
+                                    digests: local_digests.clone(),
+                                    bloom_bits,
+                                },
+                            );
+                        }
                     }
                 }
                 // Drain any leftover pending from previous power's step 2.
@@ -304,6 +318,31 @@ impl Protocol for MultiReplicaV2Protocol {
                             .collect();
                         if !to_send.is_empty() {
                             pending_updates.push((from, to_send));
+                        }
+                    }
+                    (ProtocolMsg::RibltSketch { .. }, SimulatorHint::RibltDigests { digests }) => {
+                        // Pure RIBLT sketch from lower-id (power 4): large sets, small diff.
+                        // One-way sketch; decode gives both b-only (remote) and a-only (local).
+                        let mut sender_riblt = RatelessIBLT::riblt_from(digests);
+                        let mut local_riblt = RatelessIBLT::riblt_from(local_digests.iter().cloned());
+                        let sketch_len = sender_riblt.find_all_differences(&mut local_riblt);
+                        network.record_decoded_metadata(
+                            replica_id,
+                            (sketch_len * mem::size_of::<u64>()) as u64,
+                        );
+                        let b_only = sender_riblt.get_remote_only_symbols();
+                        let a_only = sender_riblt.get_local_only_symbols();
+                        let b_only_set: HashSet<u64> = b_only.into_iter().collect();
+                        let to_send: Vec<Element> = next_set
+                            .iter()
+                            .filter(|e| b_only_set.contains(&e.digest))
+                            .cloned()
+                            .collect();
+                        if !to_send.is_empty() {
+                            pending_updates.push((from, to_send));
+                        }
+                        if !a_only.is_empty() {
+                            request_updates.push((from, a_only));
                         }
                     }
                     _ => {}
