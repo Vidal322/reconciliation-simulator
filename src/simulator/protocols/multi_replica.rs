@@ -267,6 +267,10 @@ impl Protocol for MultiReplicaProtocol {
 
         let state = self.state.entry(replica_id).or_default();
 
+        // Track which digests each neighbour has already sent us this round.
+        // Used to suppress forwarding elements that a neighbour demonstrably already has.
+        let mut received_digests: HashMap<usize, HashSet<u64>> = HashMap::new();
+
         for (from, msg, hint) in inbox {
             match msg {
                 ProtocolMsg::RatelessBloom { .. } => {
@@ -370,6 +374,13 @@ impl Protocol for MultiReplicaProtocol {
 
                 ProtocolMsg::Elements(els) => {
                     for element in els {
+                        // Record that `from` sent us this digest (they have it).
+                        if topology.kind != TopologyKind::Chord {
+                            received_digests
+                                .entry(from)
+                                .or_default()
+                                .insert(element.digest);
+                        }
                         if !local_digest_set.contains(&element.digest)
                             && !next_set.contains(&element)
                         {
@@ -385,12 +396,18 @@ impl Protocol for MultiReplicaProtocol {
         }
 
         // Eager forwarding for Star/Tree: propagate newly received elements
-        // to all neighbours except the source.
+        // to all neighbours except the source and any neighbour that already has it
+        // (evidenced by them having sent it to us this round).
         if topology.kind != TopologyKind::Chord {
             for (from, element) in new_elements {
                 for &nb in topology.neighbors(replica_id) {
                     if nb != from {
-                        state.queue_element(nb, &element);
+                        let nb_has_it = received_digests
+                            .get(&nb)
+                            .map_or(false, |s| s.contains(&element.digest));
+                        if !nb_has_it {
+                            state.queue_element(nb, &element);
+                        }
                     }
                 }
             }
