@@ -25,7 +25,11 @@ Repeat indefinitely:
 4. **Commit** your change: `git add src/simulator/protocols/multi_replica.rs && git commit -m "<short description of what you tried>"`.
 5. **Evaluate**: `cargo test 2>/dev/null && cargo run --release --bin eval -- --config agent.toml 2>/dev/null > /tmp/result.json`.
 6. **Parse** the result: read `summary.fitness` and `summary.all_converged` from `/tmp/result.json`. Check `summary.by_cell[*].std_bytes` — if any cell's `std_bytes` exceeds the improvement, the change is noise, not signal.
-7. **Record** the result: append one line to `experiments.tsv` (see format below).
+7. **Record** the result: **ALWAYS** append one line to `experiments.tsv`
+   (see format below). **You MUST log every attempt — both successes AND
+   failures.** Failed attempts with `kept: no` are essential memory to
+   avoid re-exploring dead ends. If build/tests fail, log fitness as
+   999999999.
 8. **Decide**:
    - If `all_converged` is true AND the scalar fitness improved, **keep** the commit.
    - Otherwise, **revert**: `git revert --no-edit HEAD`.

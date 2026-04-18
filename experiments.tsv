@@ -1,1 +1,2 @@
 attempt	fitness	all_converged	kept	description
+0	459237474	true	yes	baseline: naive full-state transfer across all 18 cells (3 topo × 3 J × 2 N)
