@@ -1,11 +1,9 @@
 use std::collections::{HashMap, HashSet};
-use std::mem;
 use std::time::Duration;
 
 use crate::simulator::algorithms::rateless_bloom::bayesian_cost::RATELESS_SET_RECONCILIATION_OVERHEAD;
 use crate::simulator::algorithms::rateless_bloom::expected_cost::ExpectedCostFactory;
 use crate::simulator::algorithms::rateless_bloom::{RatelessBF, StoppingStrategyFactory};
-use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::{RecvView, SendView};
 use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
 use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolKind, ProtocolStepResult};
@@ -227,7 +225,6 @@ impl Protocol for MultiReplicaProtocol {
         let mut next_set = local.snapshot_set();
         let mut encode_time = Duration::ZERO;
         let mut decode_time = Duration::ZERO;
-        let mut false_matches = 0usize;
 
         let local_digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
         let local_digest_set: HashSet<u64> = local_digests.iter().cloned().collect();
@@ -265,25 +262,10 @@ impl Protocol for MultiReplicaProtocol {
                     encode_time += sender_filter.t_enc();
                     decode_time += sender_filter.t_dec();
 
-                    let mut local_only: Vec<u64> = definitely_missing;
-
-                    if !common.is_empty() {
-                        let mut sender_riblt = RatelessIBLT::riblt_from(sender_digests);
-                        let mut common_riblt = RatelessIBLT::riblt_from(common);
-                        let sketch_len =
-                            sender_riblt.find_all_differences(&mut common_riblt);
-                        network.record_decoded_metadata(
-                            replica_id,
-                            (sketch_len * mem::size_of::<u64>()) as u64,
-                        );
-                        encode_time += sender_riblt.t_enc();
-                        decode_time += sender_riblt.t_dec();
-                        let extra = sender_riblt.get_remote_only_symbols();
-                        false_matches += extra.len();
-                        local_only.extend(extra);
-                    }
-
-                    let send_set: HashSet<u64> = local_only.into_iter().collect();
+                    // Use BF pre-filtering only: send definitely_missing elements.
+                    // BF false positives (~5%) are resolved by re-sketching next round.
+                    // This avoids the O(n × |diff|) RIBLT cost for large diffs.
+                    let send_set: HashSet<u64> = definitely_missing.into_iter().collect();
                     for element in local.set.iter() {
                         if send_set.contains(&element.digest) {
                             state.queue_element(from, element);
@@ -322,7 +304,7 @@ impl Protocol for MultiReplicaProtocol {
             metrics: LocalMetrics {
                 encode_time,
                 decode_time,
-                false_matches,
+                false_matches: 0,
             },
         }
     }
