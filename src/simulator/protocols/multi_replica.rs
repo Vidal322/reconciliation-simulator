@@ -36,6 +36,9 @@ struct NodeState {
     chord_power: usize,
     /// Chord: true while draining pending (element round), false = sketch round.
     in_element_phase: bool,
+    /// Star/Tree: true after the initial sketch has been sent. Prevents redundant
+    /// re-sketches: eager forwarding alone is sufficient for multi-hop propagation.
+    has_sketched: bool,
 }
 
 impl NodeState {
@@ -159,7 +162,10 @@ impl Protocol for MultiReplicaProtocol {
                 state.in_element_phase = true;
             }
         } else {
-            // Star / Tree: alternate sketch and element rounds.
+            // Star / Tree: one initial sketch, then pure eager-forwarding.
+            // Re-sketching is redundant: BF+RIBLT fully identifies all 1-hop diffs
+            // in round 1, and eager forwarding propagates multi-hop elements without
+            // any additional sketch rounds.
             if state.has_pending() {
                 // Element round: drain pending.
                 let to_send = state.take_pending();
@@ -173,8 +179,9 @@ impl Protocol for MultiReplicaProtocol {
                         );
                     }
                 }
-            } else {
-                // Sketch round: send BF sketch to every neighbour.
+            } else if !state.has_sketched {
+                // Initial sketch round: send BF sketch to every neighbour once.
+                state.has_sketched = true;
                 for &nb in topology.neighbors(replica_id) {
                     network.send(
                         replica_id,
@@ -187,6 +194,7 @@ impl Protocol for MultiReplicaProtocol {
                     );
                 }
             }
+            // else: no pending and already sketched → idle this round.
         }
     }
 
