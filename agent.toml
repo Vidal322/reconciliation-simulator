@@ -2,14 +2,14 @@ protocol = "MultiReplica"
 topologies = ["Star", "Tree", "Chord"]
 seeds = [42, 43, 44]
 jaccard_similarities = [0.25, 0.5, 0.75]
+num_replicas = [16, 64]
 round_cap = 100
 
 [workload]
-num_replicas = 32
 set_size = 10_000
 payload_size = 32
 digest_bits = 64
 pattern = "Uniform"
-universe_size = 200_000
+universe_size = 500_000
 zipf_exponent = 1.0
 seed = 42

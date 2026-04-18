@@ -34,13 +34,26 @@ Repeat indefinitely:
 
 ## Scalar fitness
 
-
 ```
-fitness = mean_bytes(Star) + mean_bytes(Tree) + mean_bytes(Chord)
+fitness = geometric_mean(mean_bytes across all cells)
+        = exp( (1/N) · Σ ln(mean_bytes[cell]) )
 ```
 
-Each topology's `mean_bytes` is averaged across `seeds = [42, 43, 44]`.
-Lower is better. A run where `all_converged` is false has fitness = 999999999.
+Where a cell = one `(topology, jaccard_similarity, num_replicas)` triple,
+and each cell's `mean_bytes` is averaged across `seeds = [42, 43, 44]`.
+Lower is better. Treat `all_converged == false` as fitness = infinity
+(reject the attempt).
+
+**Why geometric mean, not sum.** Summing would make large-n / low-J /
+high-edge-count cells dominate the fitness by orders of magnitude — a
+10% improvement on Chord@n=64@J=0.25 would outweigh a 90% improvement
+on Star@n=16@J=0.75. Geometric mean puts every cell on equal log-scale
+footing: an X% reduction in *any* cell reduces fitness by roughly X/N%,
+regardless of that cell's absolute byte count. This forces the agent to
+improve broadly rather than exploiting the worst cell.
+
+The numeric value is in byte-like units (it's `exp` of average log-bytes),
+so "fitness 500M" means the typical cell transfers ~500M bytes.
 
 ---
 
@@ -49,7 +62,7 @@ Lower is better. A run where `all_converged` is false has fitness = 999999999.
 Append every attempt (success or revert) to `experiments.tsv` in this format:
 
 ```
-attempt\tfitness\tstar_bytes\ttree_bytes\tchord_bytes\tstar_rounds\ttree_rounds\tchord_rounds\tkept\tdescription
+attempt\tfitness\tall_converged\tkept\tdescription
 ```
 
 The first line is the header (create the file with it if it doesn't exist).
@@ -62,30 +75,22 @@ avoid re-exploring dead ends.
 
 ## Current state
 
-`multi_replica.rs` currently contains the full-state-transfer scaffold
-(the bloom-filter variant from the previous scale was reset on the new
-workload). Current fitness:
+`multi_replica.rs` is the full-state-transfer scaffold. Fitness values
+below need refreshing — the matrix recently changed (added J and n
+sweeps, bumped `universe_size` to 500_000). To repopulate:
 
-| Topology | Bytes           | Rounds |
-|----------|-----------------|--------|
-| Star     | 122,800,560     | 2      |
-| Tree     | 887,229,040     | 9      |
-| Chord    | 1,184,879,520   | 3      |
-| **Total**| **2,194,909,120** |      |
+```bash
+for proto in FullStateTransfer Riblt StaticBfIblt HybridRbfRiblt; do
+  sed "s/protocol = \"MultiReplica\"/protocol = \"$proto\"/" agent.toml \
+    > /tmp/baseline-$proto.toml
+  ./target/release/eval --config /tmp/baseline-$proto.toml \
+    | jq '.summary.fitness'
+done
+```
 
-Reference baselines (hand-coded protocols):
-
-| Protocol         | Star        | Tree        | Chord         | Total         |
-|------------------|-------------|-------------|---------------|---------------|
-| FullStateTransfer| 122,800,560 | 887,229,040 | 1,184,879,520 | 2,194,909,120 |
-| Riblt            | 130,852,288 | 174,512,760 |   300,609,216 |   605,974,264 |
-| StaticBfIblt     | 101,813,856 | 245,014,744 |   319,377,032 |   666,205,632 |
-| HybridRbfRiblt   |  96,188,012 | 157,669,396 |   283,306,230 |   537,163,638 |
-
-`MultiReplica` starts at full-state-transfer levels. Your job is to beat
-the sketch-based baselines (Riblt, HybridRbfRiblt) across all three
-topologies — the Tree case is where full-state-transfer is weakest and
-the opportunity is largest (~5× gap vs HybridRbfRiblt).
+Your target: beat `HybridRbfRiblt`'s fitness. The largest opportunity
+is Tree at low J — FST is ~5× worse than HybridRbfRiblt there, so
+bringing Tree down gives the biggest log-space gain.
 
 ---
 
