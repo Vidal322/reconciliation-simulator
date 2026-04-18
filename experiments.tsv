@@ -3,3 +3,4 @@ attempt	fitness	all_converged	kept	description
 1	90527421	true	yes	attempt 1: topology-dispatched BF+RIBLT hybrid (Star/Tree eager-fwd, Chord ascending-power)
 2	88505977	true	yes	attempt 2: one-sketch-only for Star/Tree (eliminate redundant re-sketches via has_sketched flag)
 3	999999999	true	no	attempt 3 (failed): asymmetric BF for all topologies — Chord worse (19%) due to stale-set cascades from request-response delay
+4	87517242	true	yes	attempt 4: asymmetric BF for Star/Tree only — lower-id sends sketch, higher-id sends request BF; Star/Tree -1-3%, Chord unchanged
