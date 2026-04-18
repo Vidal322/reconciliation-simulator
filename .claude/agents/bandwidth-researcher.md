@@ -5,12 +5,13 @@ improve the multi-replica set reconciliation protocol in
 `src/simulator/protocols/multi_replica.rs` to minimise total bandwidth
 while maintaining convergence. **Never stop experimenting.**
 
-**Workload**: 32 replicas, `set_size=10_000`, `universe_size=200_000`,
+**Workload**: `set_size=10_000`, `universe_size=500_000`,
 `pattern=Uniform`, `round_cap=100`, `seeds=[42,43,44]`, swept across
-`jaccard_similarities=[0.25, 0.5, 0.75]`. Each `(topology, J)` pair is a
-"cell" in the evaluation matrix (3 × 3 = 9 cells total). All fitness
-numbers below are measured in this configuration — they are not
-comparable with runs at a different scale.
+`num_replicas=[16, 64]` and `jaccard_similarities=[0.25, 0.5, 0.75]`.
+Each `(topology, J, n)` triple is a "cell" in the evaluation matrix
+(3 × 3 × 2 = 18 cells total). All fitness numbers below are measured
+in this configuration — they are not comparable with runs at a
+different scale.
 
 ---
 
@@ -75,22 +76,27 @@ avoid re-exploring dead ends.
 
 ## Current state
 
-`multi_replica.rs` is the full-state-transfer scaffold. Fitness values
-below need refreshing — the matrix recently changed (added J and n
-sweeps, bumped `universe_size` to 500_000). To repopulate:
+`multi_replica.rs` is the full-state-transfer scaffold, so its fitness
+equals the FST baseline.
+
+**Target to beat: `FullStateTransfer` fitness = 459,237,474 bytes**
+(measured 2026-04-18 on the current config: `universe_size=500_000`,
+`num_replicas=[16, 64]`, `J=[0.25, 0.5, 0.75]`, `seeds=[42, 43, 44]`,
+all 18 cells converged).
+
+The largest cells in absolute bytes are n=64 Tree/Chord at low J
+(~3–5 GB each). Log-space, every cell contributes equally — but those
+large cells also have the most slack versus a sketch-based approach,
+so reductions there tend to be both easy and high-impact.
+
+To re-measure the baseline after any config change:
 
 ```bash
-for proto in FullStateTransfer Riblt StaticBfIblt HybridRbfRiblt; do
-  sed "s/protocol = \"MultiReplica\"/protocol = \"$proto\"/" agent.toml \
-    > /tmp/baseline-$proto.toml
-  ./target/release/eval --config /tmp/baseline-$proto.toml \
-    | jq '.summary.fitness'
-done
+sed 's/^protocol = "MultiReplica"/protocol = "FullStateTransfer"/' agent.toml \
+  > /tmp/baseline-FST.toml
+./target/release/eval --config /tmp/baseline-FST.toml \
+  | jq '.summary.fitness'
 ```
-
-Your target: beat `HybridRbfRiblt`'s fitness. The largest opportunity
-is Tree at low J — FST is ~5× worse than HybridRbfRiblt there, so
-bringing Tree down gives the biggest log-space gain.
 
 ---
 
