@@ -287,16 +287,4 @@ agent.toml                      # eval binary config
 experiments.tsv                 # agent's experiment log
 .claude/agents/
 └── bandwidth-researcher.md     # agent instructions
-docs/
-└── agent-setup-log.md          # thesis changelog (gitignored)
 ```
-
----
-
-## Thesis context
-
-See `docs/agent-setup-log.md` for the running changelog of experimental
-methodology decisions (scaling choices, Jaccard derivation, round caps,
-invariants). Each entry records what changed, why it changed, and what
-invariant it preserves or introduces — intended to be cited in the thesis
-methodology chapter.
