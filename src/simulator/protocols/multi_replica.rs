@@ -178,7 +178,7 @@ impl Protocol for MultiReplicaProtocol {
             }
 
             if state.in_element_phase {
-                // Element round: drain pending elements + flush request BFs.
+                // Element round: drain pending elements.
                 let to_send = state.take_pending();
                 for (nb, elements) in to_send {
                     if !elements.is_empty() {
@@ -190,23 +190,22 @@ impl Protocol for MultiReplicaProtocol {
                         );
                     }
                 }
-                Self::flush_requests(replica_id, state, network);
                 state.in_element_phase = false;
             } else {
-                // Sketch round: only the lower-id node sends the BF sketch.
+                // Sketch round: both neighbours exchange BF sketches (symmetric).
+                // Asymmetric sketching for Chord breaks convergence because the
+                // request-response delay causes stale sets at higher power levels.
                 let power = state.chord_power;
                 for nb in Self::chord_power_neighbors(replica_id, n, power) {
-                    if replica_id < nb {
-                        network.send(
-                            replica_id,
-                            nb,
-                            ProtocolMsg::RatelessBloom { byte_len: 0 },
-                            SimulatorHint::RatelessBloomDigests {
-                                digests: digests.clone(),
-                                bloom_bits,
-                            },
-                        );
-                    }
+                    network.send(
+                        replica_id,
+                        nb,
+                        ProtocolMsg::RatelessBloom { byte_len: 0 },
+                        SimulatorHint::RatelessBloomDigests {
+                            digests: digests.clone(),
+                            bloom_bits,
+                        },
+                    );
                 }
                 state.chord_power = (power + 1) % num_powers;
                 state.in_element_phase = true;
@@ -320,18 +319,21 @@ impl Protocol for MultiReplicaProtocol {
                         false_matches += extra.len();
                         local_only.extend(extra);
 
-                        // local_only: sender has, we don't → request via compact BF.
-                        let i_need = sender_riblt.get_local_only_symbols();
-                        if !i_need.is_empty() {
-                            state
-                                .request_to_send
-                                .entry(from)
-                                .or_default()
-                                .extend(i_need);
+                        // For Star/Tree only: capture what sender has that we need,
+                        // to be sent back as a compact request BF.
+                        // Chord stays symmetric (avoids stale-set cascades).
+                        if topology.kind != TopologyKind::Chord {
+                            let i_need = sender_riblt.get_local_only_symbols();
+                            if !i_need.is_empty() {
+                                state
+                                    .request_to_send
+                                    .entry(from)
+                                    .or_default()
+                                    .extend(i_need);
+                            }
                         }
-                    } else {
-                        // No common elements: sender and local share nothing (very rare).
-                        // Request all of sender's elements directly.
+                    } else if topology.kind != TopologyKind::Chord {
+                        // No common elements (very rare): request all of sender's elements.
                         if !sender_digests.is_empty() {
                             state
                                 .request_to_send

@@ -2,3 +2,4 @@ attempt	fitness	all_converged	kept	description
 0	459237474	true	yes	baseline: naive full-state transfer across all 18 cells (3 topo × 3 J × 2 N)
 1	90527421	true	yes	attempt 1: topology-dispatched BF+RIBLT hybrid (Star/Tree eager-fwd, Chord ascending-power)
 2	88505977	true	yes	attempt 2: one-sketch-only for Star/Tree (eliminate redundant re-sketches via has_sketched flag)
+3	999999999	true	no	attempt 3 (failed): asymmetric BF for all topologies — Chord worse (19%) due to stale-set cascades from request-response delay
