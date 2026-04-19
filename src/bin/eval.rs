@@ -190,11 +190,33 @@ fn main() {
 
     let mut runs = Vec::new();
 
+    let total_runs = eval_config.num_replicas.len()
+        * eval_config.topologies.len()
+        * eval_config.jaccard_similarities.len()
+        * eval_config.seeds.len();
+    let mut run_idx = 0usize;
+    let mut abort = false;
+
     for &num_replicas in &eval_config.num_replicas {
         for topo in &eval_config.topologies {
             for &j in &eval_config.jaccard_similarities {
                 for &seed in &eval_config.seeds {
-                    runs.push(create_run_entry(&eval_config, topo, j, num_replicas, seed))
+                    if abort {
+                        break;
+                    }
+                    run_idx += 1;
+                    let entry = create_run_entry(&eval_config, topo, j, num_replicas, seed);
+                    let status = if entry.converged { "ok" } else { "FAIL" };
+                    eprintln!(
+                        "[{}/{}] {:?} n={} J={} seed={}: {} bytes, {} rounds, {}",
+                        run_idx, total_runs, topo, num_replicas, j, seed,
+                        entry.total_bytes_sent, entry.rounds, status
+                    );
+                    if !entry.converged {
+                        eprintln!("ABORT: convergence failure — skipping remaining cells");
+                        abort = true;
+                    }
+                    runs.push(entry);
                 }
             }
         }
@@ -205,8 +227,12 @@ fn main() {
     let topos = &eval_config.topologies;
 
     let by_cell: Vec<CellSummary> = build_cells(&runs, topos, js, ns);
-    let fitness: f64 = geometric_mean(by_cell.iter().map(|c| c.mean_bytes));
-    let all_converged = by_cell.iter().all(|c| c.all_converged);
+    let all_converged = !abort && by_cell.iter().all(|c| c.all_converged);
+    let fitness: f64 = if all_converged {
+        geometric_mean(by_cell.iter().map(|c| c.mean_bytes))
+    } else {
+        f64::INFINITY
+    };
 
     let output = EvalOutput {
         runs,
