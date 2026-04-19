@@ -12,22 +12,22 @@ use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolKind, Protocol
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::{Topology, TopologyKind};
 
-/// False-positive rate for compact request Bloom filters.
+/// False-positive rate for compact Bloom filters.
 const REQUEST_BF_FPR: f64 = 0.001;
 
 /// Topology-dispatched hybrid BF+RIBLT reconciliation protocol with asymmetric sketching.
 ///
-/// **Asymmetric sketching** (all topologies): only the lower-id node sends the full
-/// RatelessBloom sketch. The higher-id node decodes it in both directions:
-///   - elements it has that the sender lacks → queue in pending (as before)
-///   - elements the sender has that it lacks (RIBLT local_only) → encode as a compact
-///     BloomFilter "request" and send back in the element round
-/// The lower-id node receives the request BF, looks up the requested elements from its
-/// local set, and queues them for delivery. This halves the number of full BF+RIBLT
-/// sessions without reducing the total state transferred.
+/// **Asymmetric sketching** (Star/Tree): only the lower-id node sends the full
+/// RatelessBloom sketch. The higher-id node decodes it:
+///   - elements it has that the sender lacks (definitely_missing + FPs) → queue to send
+///   - sends a "reverse BF" (BF of its own full set) back to the lower-id node
+/// The lower-id node receives the reverse BF and uses it to find elements the higher-id
+/// node is missing (elements in lower-id's set NOT in the reverse BF hint set), then
+/// queues them for delivery. RIBLT is used only to identify BF false positives (~61
+/// elements), not to discover i_need (eliminating the O(diff_size) RIBLT cost).
 ///
 /// Star/Tree: single asymmetric sketch + eager forwarding for multi-hop propagation.
-/// Chord:     sequential ascending-power reconciliation, each power asymmetric.
+/// Chord:     sequential ascending-power reconciliation (symmetric BF exchange).
 pub struct MultiReplicaProtocol {
     m_ratio: f64,
     state: HashMap<usize, NodeState>,
@@ -45,10 +45,9 @@ struct NodeState {
     in_element_phase: bool,
     /// Star/Tree: true after the initial sketch has been sent.
     has_sketched: bool,
-    /// Asymmetric: digests that a lower-id neighbour has but I (higher-id) don't.
-    /// Populated when I decode the lower-id's BF sketch via RIBLT local_only.
-    /// Sent as a compact BloomFilter request in the next element round.
-    request_to_send: HashMap<usize, Vec<u64>>,
+    /// Star/Tree: neighbours to which we (higher-id) owe a reverse BF in the next round.
+    /// A reverse BF encodes our full local set so the lower-id sender can find what we lack.
+    reverse_bf_needed: HashSet<usize>,
 }
 
 impl NodeState {
@@ -70,16 +69,12 @@ impl NodeState {
         self.pending.values().any(|v| !v.is_empty())
     }
 
-    fn has_requests(&self) -> bool {
-        self.request_to_send.values().any(|v| !v.is_empty())
+    fn has_reverse_bf_needed(&self) -> bool {
+        !self.reverse_bf_needed.is_empty()
     }
 
     fn take_pending(&mut self) -> HashMap<usize, Vec<Element>> {
         std::mem::take(&mut self.pending)
-    }
-
-    fn take_requests(&mut self) -> HashMap<usize, Vec<u64>> {
-        std::mem::take(&mut self.request_to_send)
     }
 }
 
@@ -121,36 +116,13 @@ impl MultiReplicaProtocol {
         }
     }
 
-    /// Bit-length for a request BloomFilter with `n` elements at `REQUEST_BF_FPR`.
-    fn request_bf_bit_len(n: usize) -> usize {
+    /// Bit-length for a BloomFilter with `n` elements at `REQUEST_BF_FPR`.
+    fn bf_bit_len(n: usize) -> usize {
         if n == 0 {
             return 1;
         }
         let ln2 = std::f64::consts::LN_2;
         ((-1.0f64 * n as f64 * REQUEST_BF_FPR.ln()) / (ln2 * ln2)).ceil() as usize
-    }
-
-    /// Send all pending request BFs stored in state.request_to_send.
-    fn flush_requests(
-        replica_id: usize,
-        state: &mut NodeState,
-        network: &mut SendView<ProtocolMsg>,
-    ) {
-        let requests = state.take_requests();
-        for (nb, req_digests) in requests {
-            if !req_digests.is_empty() {
-                let bit_len = Self::request_bf_bit_len(req_digests.len());
-                network.send(
-                    replica_id,
-                    nb,
-                    ProtocolMsg::BloomFilter { bit_len },
-                    SimulatorHint::BloomDigests {
-                        digests: req_digests,
-                        false_positive_rate: REQUEST_BF_FPR,
-                    },
-                );
-            }
-        }
     }
 }
 
@@ -212,8 +184,8 @@ impl Protocol for MultiReplicaProtocol {
             }
         } else {
             // Star / Tree: one initial asymmetric sketch, then pure eager-forwarding.
-            if state.has_pending() || state.has_requests() {
-                // Element round: send pending elements + request BFs together.
+            if state.has_pending() || state.has_reverse_bf_needed() {
+                // Element round: send pending elements + reverse BFs together.
                 let to_send = state.take_pending();
                 for (nb, elements) in to_send {
                     if !elements.is_empty() {
@@ -225,7 +197,24 @@ impl Protocol for MultiReplicaProtocol {
                         );
                     }
                 }
-                Self::flush_requests(replica_id, state, network);
+                // Send reverse BFs: our full local set encoded as a BF.
+                // The lower-id neighbour will use it to find which of its elements we lack.
+                let reverse_targets: Vec<usize> =
+                    state.reverse_bf_needed.drain().collect();
+                if !reverse_targets.is_empty() {
+                    let bit_len = Self::bf_bit_len(digests.len());
+                    for nb in reverse_targets {
+                        network.send(
+                            replica_id,
+                            nb,
+                            ProtocolMsg::BloomFilter { bit_len },
+                            SimulatorHint::BloomDigests {
+                                digests: digests.clone(),
+                                false_positive_rate: REQUEST_BF_FPR,
+                            },
+                        );
+                    }
+                }
             } else if !state.has_sketched {
                 // Initial sketch round: only lower-id sends to higher-id neighbours.
                 state.has_sketched = true;
@@ -243,7 +232,7 @@ impl Protocol for MultiReplicaProtocol {
                     }
                 }
             }
-            // else: no pending, no requests, already sketched → idle.
+            // else: no pending, no reverse BFs, already sketched → idle.
         }
     }
 
@@ -304,32 +293,25 @@ impl Protocol for MultiReplicaProtocol {
                     let mut local_only: Vec<u64> = definitely_missing;
 
                     if !common.is_empty() {
-                        // For Chord: use RIBLT(sender ∩ common, common).
-                        //   local_only is empty by construction (sender∩common ⊆ common),
-                        //   so the RIBLT diff = |FPs| only, not |local_only| + |FPs|.
-                        //   local_only is discarded for Chord anyway (symmetric exchange
-                        //   handles it), so this is strictly cheaper with no loss.
-                        // For Star/Tree: use RIBLT(sender_all, common) to also discover
-                        //   what sender has that receiver needs (→ request BF).
-                        let (mut sender_riblt, mut common_riblt) =
-                            if topology.kind == TopologyKind::Chord {
-                                let common_set: HashSet<u64> =
-                                    common.iter().cloned().collect();
-                                let sender_in_common: Vec<u64> = sender_digests
-                                    .iter()
-                                    .filter(|d| common_set.contains(d))
-                                    .cloned()
-                                    .collect();
-                                (
-                                    RatelessIBLT::riblt_from(sender_in_common.into_iter()),
-                                    RatelessIBLT::riblt_from(common.into_iter()),
-                                )
-                            } else {
-                                (
-                                    RatelessIBLT::riblt_from(sender_digests.iter().cloned()),
-                                    RatelessIBLT::riblt_from(common.into_iter()),
-                                )
-                            };
+                        // Use RIBLT(sender ∩ common, common) for ALL topologies.
+                        //   sender∩common ⊆ common by construction → local_only = ∅
+                        //   diff = |FPs| only (elements in common not in sender's set)
+                        //
+                        // For Chord: local_only was already discarded (symmetric exchange
+                        //   handles it). This is the same optimization as attempt 6.
+                        // For Star/Tree: i_need is now discovered via a reverse BF
+                        //   (we send our full local set to the lower-id node in the next
+                        //   element round, so it can directly find what we're missing).
+                        let common_set: HashSet<u64> = common.into_iter().collect();
+                        let sender_in_common: Vec<u64> = sender_digests
+                            .iter()
+                            .filter(|d| common_set.contains(d))
+                            .cloned()
+                            .collect();
+                        let mut sender_riblt =
+                            RatelessIBLT::riblt_from(sender_in_common.into_iter());
+                        let mut common_riblt =
+                            RatelessIBLT::riblt_from(common_set.into_iter());
 
                         let sketch_len =
                             sender_riblt.find_all_differences(&mut common_riblt);
@@ -344,29 +326,12 @@ impl Protocol for MultiReplicaProtocol {
                         let extra = sender_riblt.get_remote_only_symbols();
                         false_matches += extra.len();
                         local_only.extend(extra);
+                    }
 
-                        // For Star/Tree only: capture what sender has that we need,
-                        // to be sent back as a compact request BF.
-                        // Chord stays symmetric (avoids stale-set cascades).
-                        if topology.kind != TopologyKind::Chord {
-                            let i_need = sender_riblt.get_local_only_symbols();
-                            if !i_need.is_empty() {
-                                state
-                                    .request_to_send
-                                    .entry(from)
-                                    .or_default()
-                                    .extend(i_need);
-                            }
-                        }
-                    } else if topology.kind != TopologyKind::Chord {
-                        // No common elements (very rare): request all of sender's elements.
-                        if !sender_digests.is_empty() {
-                            state
-                                .request_to_send
-                                .entry(from)
-                                .or_default()
-                                .extend(sender_digests.iter().cloned());
-                        }
+                    // For Star/Tree: schedule a reverse BF to the lower-id sender.
+                    // The sender will use it to discover which of its elements we lack.
+                    if topology.kind != TopologyKind::Chord {
+                        state.reverse_bf_needed.insert(from);
                     }
 
                     // Queue our elements that sender is missing.
@@ -379,16 +344,15 @@ impl Protocol for MultiReplicaProtocol {
                 }
 
                 ProtocolMsg::BloomFilter { .. } => {
-                    // Received a request BF from a higher-id neighbour.
-                    // They need elements that I (lower-id) have.
-                    // The hint carries the exact digests; use them for zero-error lookup.
-                    let requested_digests = match hint {
+                    // Received a reverse BF from a higher-id neighbour.
+                    // It encodes their full local set; find which of our elements they lack.
+                    let their_digests = match hint {
                         SimulatorHint::BloomDigests { digests, .. } => digests,
-                        _ => panic!("expected BloomDigests hint for request BF"),
+                        _ => panic!("expected BloomDigests hint for reverse BF"),
                     };
-                    let requested: HashSet<u64> = requested_digests.into_iter().collect();
+                    let their_set: HashSet<u64> = their_digests.into_iter().collect();
                     for element in local.set.iter() {
-                        if requested.contains(&element.digest) {
+                        if !their_set.contains(&element.digest) {
                             state.queue_element(from, element);
                         }
                     }
