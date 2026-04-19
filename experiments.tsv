@@ -5,3 +5,4 @@ attempt	fitness	all_converged	kept	description
 3	999999999	true	no	attempt 3 (failed): asymmetric BF for all topologies — Chord worse (19%) due to stale-set cascades from request-response delay
 4	87517242	true	yes	attempt 4: asymmetric BF for Star/Tree only — lower-id sends sketch, higher-id sends request BF; Star/Tree -1-3%, Chord unchanged
 5	86931497	true	yes	attempt 5: suppress eager-forwarding to neighbours that already sent us the element (received_digests filter); Star/Tree -0.7%, Chord unchanged
+6	80805865	true	yes	attempt 6: Chord RIBLT(sender∩common, common) instead of RIBLT(sender_all, common) — diff shrinks from |local_only|+|FPs| to |FPs| only; Chord -32%, Star/Tree ~-1.5%, rounds 10→8 for Chord n=16

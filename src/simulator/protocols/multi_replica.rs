@@ -304,11 +304,33 @@ impl Protocol for MultiReplicaProtocol {
                     let mut local_only: Vec<u64> = definitely_missing;
 
                     if !common.is_empty() {
-                        // RIBLT resolves BF false positives AND reveals what sender has
-                        // that we (higher-id) don't — captured as a request BF.
-                        let mut sender_riblt =
-                            RatelessIBLT::riblt_from(sender_digests.iter().cloned());
-                        let mut common_riblt = RatelessIBLT::riblt_from(common);
+                        // For Chord: use RIBLT(sender ∩ common, common).
+                        //   local_only is empty by construction (sender∩common ⊆ common),
+                        //   so the RIBLT diff = |FPs| only, not |local_only| + |FPs|.
+                        //   local_only is discarded for Chord anyway (symmetric exchange
+                        //   handles it), so this is strictly cheaper with no loss.
+                        // For Star/Tree: use RIBLT(sender_all, common) to also discover
+                        //   what sender has that receiver needs (→ request BF).
+                        let (mut sender_riblt, mut common_riblt) =
+                            if topology.kind == TopologyKind::Chord {
+                                let common_set: HashSet<u64> =
+                                    common.iter().cloned().collect();
+                                let sender_in_common: Vec<u64> = sender_digests
+                                    .iter()
+                                    .filter(|d| common_set.contains(d))
+                                    .cloned()
+                                    .collect();
+                                (
+                                    RatelessIBLT::riblt_from(sender_in_common.into_iter()),
+                                    RatelessIBLT::riblt_from(common.into_iter()),
+                                )
+                            } else {
+                                (
+                                    RatelessIBLT::riblt_from(sender_digests.iter().cloned()),
+                                    RatelessIBLT::riblt_from(common.into_iter()),
+                                )
+                            };
+
                         let sketch_len =
                             sender_riblt.find_all_differences(&mut common_riblt);
                         network.record_decoded_metadata(
