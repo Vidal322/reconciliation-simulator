@@ -56,15 +56,16 @@ impl Protocol for RibltProtocol {
         let state = self.state.entry(replica_id).or_default();
 
         if state.pending.is_empty() {
-            // Sketch round: announce our digests to every neighbour.
-            // Symbols billed at decode time in recv_phase, not here.
+            // Sketch round: ship our pre-constructed RIBLT to every
+            // neighbour. Symbols billed at decode time in recv_phase.
             let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
             for &neighbor_id in topology.neighbors(replica_id) {
+                let sender_riblt = RatelessIBLT::riblt_from(digests.iter().copied());
                 network.send(
                     replica_id,
                     neighbor_id,
                     ProtocolMsg::RibltSketch { symbols: 0 },
-                    SimulatorHint::RibltDigests { digests: digests.clone() },
+                    SimulatorHint::Riblt(sender_riblt),
                 );
             }
         } else {
@@ -102,15 +103,15 @@ impl Protocol for RibltProtocol {
         for (from, msg, hint) in inbox {
             match msg {
                 ProtocolMsg::RibltSketch { .. } => {
-                    let remote_digests = match hint {
-                        SimulatorHint::RibltDigests { digests } => digests,
-                        _ => panic!("expected RibltDigests hint"),
+                    let mut remote_riblt = match hint {
+                        SimulatorHint::Riblt(r) => r,
+                        _ => panic!("expected Riblt hint"),
                     };
 
                     // Run the RIBLT decode against the sender's
-                    // digests; bill the true sketch length now.
-                    let mut local_riblt = RatelessIBLT::riblt_from(local_digests.clone());
-                    let mut remote_riblt = RatelessIBLT::riblt_from(remote_digests);
+                    // sketch; bill the true sketch length now.
+                    let mut local_riblt =
+                        RatelessIBLT::riblt_from(local_digests.iter().copied());
 
                     let sketch_len = local_riblt.find_all_differences(&mut remote_riblt);
                     let metadata_bytes = (sketch_len * std::mem::size_of::<u64>()) as u64;

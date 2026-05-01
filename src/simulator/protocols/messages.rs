@@ -1,3 +1,6 @@
+use crate::simulator::algorithms::bloom::BloomFilter;
+use crate::simulator::algorithms::rateless_bloom::RatelessBF;
+use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::WireSized;
 use crate::simulator::replica::Element;
 
@@ -47,21 +50,30 @@ impl WireSized for ProtocolMsg {
 }
 
 /// Auxiliary reconstruction data that travels outside the Network.
-/// Never billed — exists only so the receiver can rebuild the
-/// sender's data structure without real serialization.
+/// Never billed — exists only to skip real serialization of sketch
+/// payloads. Each variant carries an *already-constructed* lossy data
+/// structure so the receiver can interact with it only through its
+/// public lossy API (e.g. `BloomFilter::contains`,
+/// `RatelessIBLT::find_all_differences`). Raw source digests are not
+/// reachable from any variant.
 ///
+/// Composite variants (`BloomRiblt`, `RatelessBloomRiblt`) exist for
+/// protocols that combine a probabilistic filter with a RIBLT
+/// false-positive resolver: the sender must commit to both structures
+/// upfront because the receiver cannot reconstruct the sender's RIBLT
+/// without access to the source set.
 pub enum SimulatorHint {
     None,
-    RibltDigests {
-        digests: Vec<u64>,
+    Riblt(RatelessIBLT<u64>),
+    Bloom(BloomFilter<u64>),
+    RatelessBloom(RatelessBF<u64>),
+    BloomRiblt {
+        bf: BloomFilter<u64>,
+        riblt: RatelessIBLT<u64>,
     },
-    BloomDigests {
-        digests: Vec<u64>,
-        false_positive_rate: f64,
-    },
-    RatelessBloomDigests {
-        digests: Vec<u64>,
-        bloom_bits: usize,
+    RatelessBloomRiblt {
+        bf: RatelessBF<u64>,
+        riblt: RatelessIBLT<u64>,
     },
 }
 

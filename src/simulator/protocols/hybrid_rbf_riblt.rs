@@ -88,14 +88,16 @@ impl Protocol for HybridRbfRibltProtocol {
             let bloom_bits = self.bloom_bits_for(digests.len());
 
             for &neighbor_id in topology.neighbors(replica_id) {
+                // Construct a fresh RatelessBF and RIBLT per neighbour:
+                // none of the sketch types are Clone, and the receiver
+                // takes ownership of the hint.
+                let bf = RatelessBF::new(digests.clone(), bloom_bits);
+                let riblt = RatelessIBLT::riblt_from(digests.iter().copied());
                 network.send(
                     replica_id,
                     neighbor_id,
                     ProtocolMsg::RatelessBloom { byte_len: 0 },
-                    SimulatorHint::RatelessBloomDigests {
-                        digests: digests.clone(),
-                        bloom_bits,
-                    },
+                    SimulatorHint::RatelessBloomRiblt { bf, riblt },
                 );
             }
         } else {
@@ -132,26 +134,22 @@ impl Protocol for HybridRbfRibltProtocol {
         for (from, msg, hint) in inbox {
             match msg {
                 ProtocolMsg::RatelessBloom { .. } => {
-                    let (sender_digests, bloom_bits) = match hint {
-                        SimulatorHint::RatelessBloomDigests {
-                            digests,
-                            bloom_bits,
-                        } => (digests, bloom_bits),
-                        _ => panic!("expected RatelessBloomDigests hint"),
+                    let (mut sender_filter, mut sender_riblt) = match hint {
+                        SimulatorHint::RatelessBloomRiblt { bf, riblt } => (bf, riblt),
+                        _ => panic!("expected RatelessBloomRiblt hint"),
                     };
 
-                    // Rebuild the sender's RatelessBF from its digests.
-                    let mut sender_filter = RatelessBF::new(sender_digests.clone(), bloom_bits);
-
+                    let bloom_bits = sender_filter.bits_per_filter();
+                    let sender_size = sender_filter.source_size();
                     let effective_m_ratio =
-                        Self::effective_m_ratio(bloom_bits, sender_digests.len());
+                        Self::effective_m_ratio(bloom_bits, sender_size);
 
                     // Create stopping strategy with OUR digests as the
                     // elements to be tested against the sender's filter.
                     let local_digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
 
                     let stopping_strategy = ExpectedCostFactory::new(effective_m_ratio)
-                        .create(local_digests, sender_digests.len());
+                        .create(local_digests, sender_size);
 
                     let (common, definitely_missing) =
                         sender_filter.extend_until(stopping_strategy);
@@ -168,7 +166,6 @@ impl Protocol for HybridRbfRibltProtocol {
 
                     // Resolve the ambiguous subset via RIBLT.
                     if !common.is_empty() {
-                        let mut sender_riblt = RatelessIBLT::riblt_from(sender_digests);
                         let mut common_riblt = RatelessIBLT::riblt_from(common);
 
                         let sketch_len = sender_riblt.find_all_differences(&mut common_riblt);

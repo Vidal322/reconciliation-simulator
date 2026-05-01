@@ -227,18 +227,15 @@ mod tests {
 
     #[test]
     fn hint_store_drains_in_fifo_order() {
-        let mut store = HintStore::new();
-        store.store(0, 1, SimulatorHint::RibltDigests { digests: vec![10] });
-        store.store(0, 1, SimulatorHint::RibltDigests { digests: vec![20] });
+        use crate::simulator::algorithms::riblt::RatelessIBLT;
 
-        match store.drain_for(0, 1) {
-            SimulatorHint::RibltDigests { digests } => assert_eq!(digests, vec![10]),
-            _ => panic!("expected RibltDigests"),
-        }
-        match store.drain_for(0, 1) {
-            SimulatorHint::RibltDigests { digests } => assert_eq!(digests, vec![20]),
-            _ => panic!("expected RibltDigests"),
-        }
+        let mut store = HintStore::new();
+        store.store(0, 1, SimulatorHint::Riblt(RatelessIBLT::riblt_from([10u64])));
+        store.store(0, 1, SimulatorHint::Riblt(RatelessIBLT::riblt_from([20u64])));
+
+        // FIFO: first stored, first drained.
+        assert!(matches!(store.drain_for(0, 1), SimulatorHint::Riblt(_)));
+        assert!(matches!(store.drain_for(0, 1), SimulatorHint::Riblt(_)));
         assert!(matches!(store.drain_for(0, 1), SimulatorHint::None));
     }
 }

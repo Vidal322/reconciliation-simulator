@@ -64,6 +64,14 @@ where
         self.m
     }
 
+    /// Number of source elements the filter was constructed from.
+    /// Returns only the count — never the elements themselves —
+    /// so it is safe to expose without leaking the sender's set.
+    #[inline]
+    pub fn source_size(&self) -> usize {
+        self.data.len()
+    }
+
     pub fn extend(&mut self) {
         let mut filter = BloomFilter::from_raw_parts(self.m, 1);
         self.data.iter().for_each(|d| filter.insert(d));

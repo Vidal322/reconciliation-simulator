@@ -80,21 +80,32 @@ impl Protocol for StaticBfIbltProtocol {
         if state.pending.is_empty() {
             let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
 
-            let bloom: BloomFilter<u64> = BloomFilter::new(
+            // Construct a populated BF + RIBLT once to determine the
+            // billed bit_len (Bloom is shipped to every neighbour).
+            let probe_bloom: BloomFilter<u64> = BloomFilter::new(
                 digests.len().max(1),
                 self.false_positive_rate,
             );
-            let bit_len = bloom.bit_len();
+            let bit_len = probe_bloom.bit_len();
 
             for &neighbor_id in topology.neighbors(replica_id) {
+                // Construct a fresh BloomFilter and RIBLT per neighbour:
+                // none of the sketch types are Clone, and the receiver
+                // takes ownership of the hint.
+                let mut bf: BloomFilter<u64> = BloomFilter::new(
+                    digests.len().max(1),
+                    self.false_positive_rate,
+                );
+                for d in &digests {
+                    bf.timed_insert(d);
+                }
+                let riblt = RatelessIBLT::riblt_from(digests.iter().copied());
+
                 network.send(
                     replica_id,
                     neighbor_id,
                     ProtocolMsg::BloomFilter { bit_len },
-                    SimulatorHint::BloomDigests {
-                        digests: digests.clone(),
-                        false_positive_rate: self.false_positive_rate,
-                    },
+                    SimulatorHint::BloomRiblt { bf, riblt },
                 );
             }
         } else {
@@ -131,21 +142,10 @@ impl Protocol for StaticBfIbltProtocol {
         for (from, msg, hint) in inbox {
             match msg {
                 ProtocolMsg::BloomFilter { .. } => {
-                    let (sender_digests, false_positive_rate) = match hint {
-                        SimulatorHint::BloomDigests { digests, false_positive_rate } => {
-                            (digests, false_positive_rate)
-                        }
-                        _ => panic!("expected BloomDigests hint"),
+                    let (mut bloom, mut sender_riblt) = match hint {
+                        SimulatorHint::BloomRiblt { bf, riblt } => (bf, riblt),
+                        _ => panic!("expected BloomRiblt hint"),
                     };
-
-                    // Rebuild the sender's Bloom from its digests.
-                    let mut bloom = BloomFilter::new(
-                        sender_digests.len().max(1),
-                        false_positive_rate,
-                    );
-                    for digest in &sender_digests {
-                        bloom.timed_insert(digest);
-                    }
 
                     // Bill the Bloom metadata (bit array + header).
                     let bloom_meta = bloom.byte_len()
@@ -177,8 +177,6 @@ impl Protocol for StaticBfIbltProtocol {
                     let mut recovered_local_only = confirmed_local_only;
 
                     if !candidate_positives.is_empty() {
-                        let mut sender_riblt =
-                            RatelessIBLT::riblt_from(sender_digests);
                         let mut candidate_riblt =
                             RatelessIBLT::riblt_from(candidate_positives);
 
