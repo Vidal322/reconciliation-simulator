@@ -99,7 +99,7 @@ impl<T: Symbol> Sketch<T> {
 
 #[derive(Debug)]
 pub struct RatelessIBLT<T: Symbol> {
-    pub sketch: Sketch<T>,
+    sketch: Sketch<T>,
     subtracted_index: Option<usize>,
     source_symbols: Vec<HashedSymbolMapping<T>>,
     next_mapping_idx: BinaryHeap<Reverse<SourceSymbolIdxToLastMappingIdx>>,

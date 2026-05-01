@@ -60,16 +60,6 @@ where
     }
 
     #[inline]
-    pub fn data(&self) -> &[T] {
-        &self.data
-    }
-
-    #[inline]
-    pub fn filters(&self) -> &[BloomFilter<T>] {
-        &self.bloom_filters
-    }
-
-    #[inline]
     pub fn bits_per_filter(&self) -> usize {
         self.m
     }
@@ -148,7 +138,7 @@ mod tests {
 
         fn should_stop(&mut self, bf: &mut RatelessBF<u64>) -> Option<(Vec<u64>, Vec<u64>)> {
             if bf.len() >= self.n {
-                Some((bf.data().to_vec(), Vec::new()))
+                Some((bf.data.to_vec(), Vec::new()))
             } else {
                 None
             }
