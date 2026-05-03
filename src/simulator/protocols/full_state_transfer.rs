@@ -1,6 +1,5 @@
-use crate::simulator::network::{RecvView, SendView};
-use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
-use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolStepResult, ProtocolKind};
+use crate::simulator::network::{ProtocolMsg, Outbox};
+use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolKind, ProtocolStepResult};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
@@ -23,16 +22,11 @@ impl Protocol for FullStateTransfer {
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
-        network: &mut SendView<ProtocolMsg>,
+        outbox: &mut Outbox<'_>,
     ) {
         let payload: Vec<Element> = local.set.iter().cloned().collect();
         for &neighbor_id in topology.neighbors(replica_id) {
-            network.send(
-                replica_id,
-                neighbor_id,
-                ProtocolMsg::Elements(payload.clone()),
-                SimulatorHint::None,
-            );
+            outbox.send_elements(replica_id, neighbor_id, payload.clone());
         }
     }
 
@@ -41,12 +35,11 @@ impl Protocol for FullStateTransfer {
         _replica_id: usize,
         local: &Replica,
         _topology: &Topology,
-        inbox: Vec<(usize, ProtocolMsg, SimulatorHint)>,
-        _network: &mut RecvView<ProtocolMsg>,
+        inbox: &mut [(usize, ProtocolMsg)],
     ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
-        for (_from, msg, _hint) in inbox {
-            if let ProtocolMsg::Elements(els) = msg {
+        for (_from, msg) in inbox.iter_mut() {
+            if let Some(els) = msg.take_elements() {
                 for element in els {
                     next_set.insert(element);
                 }
@@ -63,7 +56,7 @@ impl Protocol for FullStateTransfer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simulator::network::{HintStore, Network};
+    use crate::simulator::network::Network;
     use crate::simulator::protocols::test_helpers::make_element;
     use std::collections::HashSet;
 
@@ -88,12 +81,11 @@ mod tests {
             ),
         ];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
-        let mut hints = HintStore::new();
 
         {
-            let mut send_view = SendView::new(&mut network, &mut hints);
+            let mut outbox = Outbox::new(&mut network);
             for (id, replica) in replicas.iter().enumerate() {
-                protocol.send_phase(id, replica, &topology, &mut send_view);
+                protocol.send_phase(id, replica, &topology, &mut outbox);
             }
         }
 
@@ -118,25 +110,16 @@ mod tests {
             make_replica(1, vec![make_element(2, 2, 4), make_element(3, 3, 4)]),
         ];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
-        let mut hints = HintStore::new();
 
         {
-            let mut send_view = SendView::new(&mut network, &mut hints);
+            let mut outbox = Outbox::new(&mut network);
             for (id, replica) in replicas.iter().enumerate() {
-                protocol.send_phase(id, replica, &topology, &mut send_view);
+                protocol.send_phase(id, replica, &topology, &mut outbox);
             }
         }
 
-        let inbox_0: Vec<(usize, ProtocolMsg, SimulatorHint)> = network
-            .drain_inbox(0)
-            .into_iter()
-            .map(|(from, msg)| {
-                let hint = hints.drain_for(from, 0);
-                (from, msg, hint)
-            })
-            .collect();
-        let mut recv_view = RecvView::new(&mut network);
-        let result_0 = protocol.recv_phase(0, &replicas[0], &topology, inbox_0, &mut recv_view);
+        let mut inbox_0: Vec<(usize, ProtocolMsg)> = network.drain_inbox(0);
+        let result_0 = protocol.recv_phase(0, &replicas[0], &topology, &mut inbox_0);
 
         let digests = result_0
             .next_set

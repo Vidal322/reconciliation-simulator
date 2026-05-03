@@ -1,10 +1,21 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+use std::mem;
+use std::time::Duration;
 
-use crate::simulator::protocols::messages::SimulatorHint;
+use crate::simulator::algorithms::bloom::BloomFilter;
+use crate::simulator::algorithms::rateless_bloom::{RatelessBF, StoppingStrategy};
+use crate::simulator::algorithms::riblt::RatelessIBLT;
+use crate::simulator::replica::Element;
 use crate::simulator::topology::Topology;
+
 /// Wire-size contract for anything sent through `Network`.
 /// Split into `state_bytes` (payload: actual set elements being transferred)
 /// and `metadata_bytes` (sketches, filters, coefficients, headers).
+///
+/// `state_bytes` is consulted by `Network::send` at send time;
+/// `metadata_bytes` is consulted by `Network::bill_metadata_post_recv`
+/// after `recv_phase` returns. The split is what lets RIBLT and rateless
+/// Bloom messages bill their post-decode size honestly.
 pub trait WireSized {
     fn state_bytes(&self) -> u64;
     fn metadata_bytes(&self) -> u64;
@@ -21,9 +32,8 @@ pub struct NetworkStats {
 /// A simulated point-to-point network.
 ///
 /// Each node has a per-node inbox.  Messages are delivered by calling
-/// send, which checks if `from` and `to` are topology neighbours
-/// and then places `msg` in `to`'s inbox.
-///
+/// `send`, which checks if `from` and `to` are topology neighbours and
+/// places `msg` in `to`'s inbox.
 pub struct Network<Msg: WireSized> {
     inboxes: Vec<VecDeque<(usize, Msg)>>,
     neighbors: Vec<Vec<usize>>,
@@ -34,7 +44,6 @@ pub struct Network<Msg: WireSized> {
 }
 
 impl<Msg: WireSized> Network<Msg> {
-    /// Build a `Network` mirroring the adjacency of `topology`.
     pub fn from_topology(topology: &Topology) -> Self {
         let n = topology.node_count();
         let neighbors = (0..n).map(|id| topology.neighbors(id).to_vec()).collect();
@@ -48,42 +57,37 @@ impl<Msg: WireSized> Network<Msg> {
         }
     }
 
-    /// Deliver `msg` from `from` to `to`.
-    /// Panics if `to` is not a neighbour of `from`
+    /// Deliver `msg` from `from` to `to`. Bills `state_bytes` to the
+    /// sender. Metadata is billed separately, post-recv, by
+    /// `bill_metadata_post_recv` — sketches and filters do not have a
+    /// final wire cost until after the receiver has interacted with them.
     pub fn send(&mut self, from: usize, to: usize, msg: Msg) {
         assert!(
             self.neighbors[from].contains(&to),
             "node {from} attempted to send to non-neighbour {to}"
         );
-        // count data
         let s = msg.state_bytes();
-        let m = msg.metadata_bytes();
-
         self.bytes_state += s;
-        self.bytes_metadata += m;
         self.per_node_state[from] += s;
-        self.per_node_metadata[from] += m;
-
         self.inboxes[to].push_back((from, msg));
     }
 
-    /// Drain and return all pending messages for `node`.
     pub fn drain_inbox(&mut self, node: usize) -> Vec<(usize, Msg)> {
         self.inboxes[node].drain(..).collect()
     }
 
-    /// Record metadata bytes attributed to a node that learned them
-    /// by decoding (rather than emitting). Used by interactive
-    /// protocols where the wire cost depends on the receiver's local
-    /// state — e.g. RIBLT, where the symbol count is determined
-    /// during the joint decode and is not knowable at send time.
-    ///
-    /// This is the only way to bill bytes outside `send()`. The method
-    /// lives on `Network` so the harness retains exclusive control of
-    /// the byte counters; protocols cannot bypass it.
-    pub fn record_decoded_metadata(&mut self, node: usize, bytes: u64) {
-        self.bytes_metadata += bytes;
-        self.per_node_metadata[node] += bytes;
+    /// Bill metadata bytes for every message in `inbox`, attributed to
+    /// the original sender. Called by the engine after `recv_phase`
+    /// returns, so any decode-time growth (RIBLT consumed symbols,
+    /// rateless Bloom extension) is captured. Protocols cannot influence
+    /// this billing path — it reads `metadata_bytes()` off the message
+    /// directly.
+    pub fn bill_metadata_post_recv(&mut self, inbox: &[(usize, Msg)]) {
+        for (from, msg) in inbox {
+            let m = msg.metadata_bytes();
+            self.bytes_metadata += m;
+            self.per_node_metadata[*from] += m;
+        }
     }
 
     pub fn stats(&self) -> NetworkStats {
@@ -95,7 +99,6 @@ impl<Msg: WireSized> Network<Msg> {
         }
     }
 
-    /// Clear every inbox and reset metrics
     pub fn reset(&mut self) {
         for inbox in &mut self.inboxes {
             inbox.clear();
@@ -107,62 +110,332 @@ impl<Msg: WireSized> Network<Msg> {
     }
 }
 
-pub struct HintStore {
-    pending: HashMap<(usize, usize), VecDeque<SimulatorHint>>,
+// ---------------------------------------------------------------------------
+// Sealed message wrappers.
+//
+// Each wrapper owns a sketch / filter and exposes only the operations the
+// receiver legitimately needs. Constructors are module-private (no `pub`),
+// so callers outside `network.rs` cannot build one — and therefore cannot
+// overwrite a `&mut RibltMsg` they receive in `recv_phase` with a freshly
+// constructed wrapper that would zero out the billed wire cost.
+//
+// `#![forbid(unsafe_code)]` at the crate root closes the `ptr::write`
+// escape hatch.
+// ---------------------------------------------------------------------------
+
+pub struct RibltMsg {
+    inner: RatelessIBLT<u64>,
 }
 
-impl HintStore {
-    pub fn new() -> Self {
-        Self {
-            pending: HashMap::new(),
+impl RibltMsg {
+    fn new(inner: RatelessIBLT<u64>) -> Self {
+        Self { inner }
+    }
+
+    /// Decode this sketch against the receiver's `local` sketch. Both
+    /// sides are extended in lockstep until decode succeeds; decoded
+    /// differences accumulate on `self`. Returns the number of consumed
+    /// coded symbols (== `consumed_symbols()` after the call).
+    pub fn decode_against(&mut self, local: &mut RatelessIBLT<u64>) -> usize {
+        self.inner.find_all_differences(local)
+    }
+
+    pub fn consumed_symbols(&self) -> usize {
+        self.inner.consumed_symbols()
+    }
+
+    /// Symbols on the message side (sender) but not on `local`.
+    pub fn local_only(&self) -> Vec<u64> {
+        self.inner.get_local_only_symbols()
+    }
+
+    /// Symbols on `local` (receiver) but not on the message side (sender).
+    pub fn remote_only(&self) -> Vec<u64> {
+        self.inner.get_remote_only_symbols()
+    }
+
+    pub fn t_enc(&self) -> Duration {
+        self.inner.t_enc()
+    }
+
+    pub fn t_dec(&self) -> Duration {
+        self.inner.t_dec()
+    }
+}
+
+pub struct BloomMsg {
+    inner: BloomFilter<u64>,
+}
+
+impl BloomMsg {
+    fn new(inner: BloomFilter<u64>) -> Self {
+        Self { inner }
+    }
+
+    pub fn contains(&mut self, digest: &u64) -> bool {
+        self.inner.timed_contains(digest)
+    }
+
+    pub fn byte_len(&self) -> usize {
+        self.inner.byte_len()
+    }
+
+    pub fn t_enc(&self) -> Duration {
+        self.inner.t_enc()
+    }
+
+    pub fn t_dec(&self) -> Duration {
+        self.inner.t_dec()
+    }
+}
+
+pub struct RatelessBloomMsg {
+    inner: RatelessBF<u64>,
+}
+
+impl RatelessBloomMsg {
+    fn new(inner: RatelessBF<u64>) -> Self {
+        Self { inner }
+    }
+
+    pub fn bits_per_filter(&self) -> usize {
+        self.inner.bits_per_filter()
+    }
+
+    pub fn source_size(&self) -> usize {
+        self.inner.source_size()
+    }
+
+    pub fn extend_until<S: StoppingStrategy<u64>>(
+        &mut self,
+        strategy: S,
+    ) -> (Vec<u64>, Vec<u64>) {
+        self.inner.extend_until(strategy)
+    }
+
+    pub fn size_of(&self) -> usize {
+        self.inner.size_of()
+    }
+
+    pub fn t_enc(&self) -> Duration {
+        self.inner.t_enc()
+    }
+
+    pub fn t_dec(&self) -> Duration {
+        self.inner.t_dec()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ProtocolMsg — opaque envelope.
+//
+// The inner enum is private; protocols cannot pattern-match on it and
+// cannot construct a new `ProtocolMsg` (no public constructor). Access
+// goes through the methods below, which return the sealed wrappers
+// above. There is no way to swap variants from outside this module.
+// ---------------------------------------------------------------------------
+
+pub struct ProtocolMsg {
+    inner: ProtocolMsgInner,
+}
+
+enum ProtocolMsgInner {
+    Elements(Vec<Element>),
+    Riblt(RibltMsg),
+    Bloom(BloomMsg),
+    RatelessBloom(RatelessBloomMsg),
+    BloomRiblt {
+        bf: BloomMsg,
+        riblt: RibltMsg,
+    },
+    RatelessBloomRiblt {
+        bf: RatelessBloomMsg,
+        riblt: RibltMsg,
+    },
+}
+
+impl ProtocolMsg {
+    /// Take ownership of the elements payload, leaving an empty Vec
+    /// behind. Returns `None` if the message is not an Elements variant.
+    pub fn take_elements(&mut self) -> Option<Vec<Element>> {
+        if let ProtocolMsgInner::Elements(v) = &mut self.inner {
+            Some(mem::take(v))
+        } else {
+            None
         }
     }
 
-    pub fn store(&mut self, from: usize, to: usize, hint: SimulatorHint) {
-        self.pending.entry((from, to)).or_default().push_back(hint);
+    pub fn as_riblt(&mut self) -> Option<&mut RibltMsg> {
+        if let ProtocolMsgInner::Riblt(r) = &mut self.inner {
+            Some(r)
+        } else {
+            None
+        }
     }
 
-    pub fn drain_for(&mut self, from: usize, to: usize) -> SimulatorHint {
-        self.pending
-            .get_mut(&(from, to))
-            .and_then(|q| q.pop_front())
-            .unwrap_or(SimulatorHint::None)
+    pub fn as_bloom(&mut self) -> Option<&mut BloomMsg> {
+        if let ProtocolMsgInner::Bloom(b) = &mut self.inner {
+            Some(b)
+        } else {
+            None
+        }
     }
 
-    pub fn reset(&mut self) {
-        self.pending.clear();
+    pub fn as_rateless_bloom(&mut self) -> Option<&mut RatelessBloomMsg> {
+        if let ProtocolMsgInner::RatelessBloom(r) = &mut self.inner {
+            Some(r)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_bloom_riblt(&mut self) -> Option<(&mut BloomMsg, &mut RibltMsg)> {
+        if let ProtocolMsgInner::BloomRiblt { bf, riblt } = &mut self.inner {
+            Some((bf, riblt))
+        } else {
+            None
+        }
+    }
+
+    pub fn as_rateless_bloom_riblt(
+        &mut self,
+    ) -> Option<(&mut RatelessBloomMsg, &mut RibltMsg)> {
+        if let ProtocolMsgInner::RatelessBloomRiblt { bf, riblt } = &mut self.inner {
+            Some((bf, riblt))
+        } else {
+            None
+        }
     }
 }
 
-/// Restricted view passed to send_phase: can only send messages.
-pub struct SendView<'a, Msg: WireSized> {
-    network: &'a mut Network<Msg>,
-    hints: &'a mut HintStore,
-}
-
-impl<'a, Msg: WireSized> SendView<'a, Msg> {
-    pub fn new(network: &'a mut Network<Msg>, hints: &'a mut HintStore) -> Self {
-        Self { network, hints }
+impl WireSized for ProtocolMsg {
+    fn state_bytes(&self) -> u64 {
+        match &self.inner {
+            ProtocolMsgInner::Elements(els) => els.iter().map(|e| e.wire_size() as u64).sum(),
+            _ => 0,
+        }
     }
 
-    pub fn send(&mut self, from: usize, to: usize, msg: Msg, hint: SimulatorHint) {
-        self.network.send(from, to, msg);
-        self.hints.store(from, to, hint);
+    fn metadata_bytes(&self) -> u64 {
+        match &self.inner {
+            ProtocolMsgInner::Elements(_) => 0,
+            ProtocolMsgInner::Riblt(r) => riblt_wire_bytes(r),
+            ProtocolMsgInner::Bloom(b) => bloom_wire_bytes(b),
+            ProtocolMsgInner::RatelessBloom(r) => rateless_bloom_wire_bytes(r),
+            ProtocolMsgInner::BloomRiblt { bf, riblt } => {
+                bloom_wire_bytes(bf) + riblt_wire_bytes(riblt)
+            }
+            ProtocolMsgInner::RatelessBloomRiblt { bf, riblt } => {
+                rateless_bloom_wire_bytes(bf) + riblt_wire_bytes(riblt)
+            }
+        }
     }
 }
 
-/// Restricted view passed to recv_phase: can only record decoded metadata.
-pub struct RecvView<'a, Msg: WireSized> {
-    network: &'a mut Network<Msg>,
+fn riblt_wire_bytes(r: &RibltMsg) -> u64 {
+    (r.consumed_symbols() * mem::size_of::<u64>()) as u64
 }
 
-impl<'a, Msg: WireSized> RecvView<'a, Msg> {
-    pub fn new(network: &'a mut Network<Msg>) -> Self {
+fn bloom_wire_bytes(b: &BloomMsg) -> u64 {
+    (b.byte_len() + mem::size_of::<usize>() + mem::size_of::<u64>()) as u64
+}
+
+fn rateless_bloom_wire_bytes(r: &RatelessBloomMsg) -> u64 {
+    r.size_of() as u64
+}
+
+// ---------------------------------------------------------------------------
+// Outbox — the only path protocols have to emit messages. Each factory
+// method takes the raw sketches/filters and packages them into a
+// ProtocolMsg internally; the protocol never holds a constructible
+// reference to the envelope.
+// ---------------------------------------------------------------------------
+
+pub struct Outbox<'a> {
+    network: &'a mut Network<ProtocolMsg>,
+}
+
+impl<'a> Outbox<'a> {
+    pub fn new(network: &'a mut Network<ProtocolMsg>) -> Self {
         Self { network }
     }
 
-    pub fn record_decoded_metadata(&mut self, node: usize, bytes: u64) {
-        self.network.record_decoded_metadata(node, bytes);
+    pub fn send_elements(&mut self, from: usize, to: usize, elements: Vec<Element>) {
+        self.network.send(
+            from,
+            to,
+            ProtocolMsg {
+                inner: ProtocolMsgInner::Elements(elements),
+            },
+        );
+    }
+
+    pub fn send_riblt(&mut self, from: usize, to: usize, riblt: RatelessIBLT<u64>) {
+        self.network.send(
+            from,
+            to,
+            ProtocolMsg {
+                inner: ProtocolMsgInner::Riblt(RibltMsg::new(riblt)),
+            },
+        );
+    }
+
+    pub fn send_bloom(&mut self, from: usize, to: usize, bloom: BloomFilter<u64>) {
+        self.network.send(
+            from,
+            to,
+            ProtocolMsg {
+                inner: ProtocolMsgInner::Bloom(BloomMsg::new(bloom)),
+            },
+        );
+    }
+
+    pub fn send_rateless_bloom(&mut self, from: usize, to: usize, bf: RatelessBF<u64>) {
+        self.network.send(
+            from,
+            to,
+            ProtocolMsg {
+                inner: ProtocolMsgInner::RatelessBloom(RatelessBloomMsg::new(bf)),
+            },
+        );
+    }
+
+    pub fn send_bloom_riblt(
+        &mut self,
+        from: usize,
+        to: usize,
+        bloom: BloomFilter<u64>,
+        riblt: RatelessIBLT<u64>,
+    ) {
+        self.network.send(
+            from,
+            to,
+            ProtocolMsg {
+                inner: ProtocolMsgInner::BloomRiblt {
+                    bf: BloomMsg::new(bloom),
+                    riblt: RibltMsg::new(riblt),
+                },
+            },
+        );
+    }
+
+    pub fn send_rateless_bloom_riblt(
+        &mut self,
+        from: usize,
+        to: usize,
+        bf: RatelessBF<u64>,
+        riblt: RatelessIBLT<u64>,
+    ) {
+        self.network.send(
+            from,
+            to,
+            ProtocolMsg {
+                inner: ProtocolMsgInner::RatelessBloomRiblt {
+                    bf: RatelessBloomMsg::new(bf),
+                    riblt: RibltMsg::new(riblt),
+                },
+            },
+        );
     }
 }
 
@@ -185,8 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn send_counts_bytes_on_sender_side() {
-        // Star with 3 nodes: 0 is centre, 1 and 2 are leaves.
+    fn send_counts_state_bytes_only() {
         let topo = Topology::star(3);
         let mut net: Network<Dummy> = Network::from_topology(&topo);
 
@@ -195,11 +467,27 @@ mod tests {
 
         let st = net.stats();
         assert_eq!(st.bytes_state, 150);
-        assert_eq!(st.bytes_metadata, 10);
+        // Metadata is billed separately, post-recv.
+        assert_eq!(st.bytes_metadata, 0);
         assert_eq!(st.per_node_state[0], 150);
+    }
+
+    #[test]
+    fn bill_metadata_post_recv_attributes_to_sender() {
+        let topo = Topology::star(3);
+        let mut net: Network<Dummy> = Network::from_topology(&topo);
+
+        net.send(0, 1, Dummy { s: 0, m: 7 });
+        net.send(0, 2, Dummy { s: 0, m: 3 });
+
+        let inbox1 = net.drain_inbox(1);
+        let inbox2 = net.drain_inbox(2);
+        net.bill_metadata_post_recv(&inbox1);
+        net.bill_metadata_post_recv(&inbox2);
+
+        let st = net.stats();
+        assert_eq!(st.bytes_metadata, 10);
         assert_eq!(st.per_node_metadata[0], 10);
-        assert_eq!(st.per_node_state[1], 0);
-        assert_eq!(st.per_node_state[2], 0);
     }
 
     #[test]
@@ -218,24 +506,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "non-neighbour")]
     fn send_to_non_neighbour_panics() {
-        // Tree with 3 nodes: 0 is root, 1 and 2 are its children.
-        // Nodes 1 and 2 are siblings — not directly connected.
         let topo = Topology::tree(3);
         let mut net: Network<Dummy> = Network::from_topology(&topo);
         net.send(1, 2, Dummy { s: 1, m: 1 });
-    }
-
-    #[test]
-    fn hint_store_drains_in_fifo_order() {
-        use crate::simulator::algorithms::riblt::RatelessIBLT;
-
-        let mut store = HintStore::new();
-        store.store(0, 1, SimulatorHint::Riblt(RatelessIBLT::riblt_from([10u64])));
-        store.store(0, 1, SimulatorHint::Riblt(RatelessIBLT::riblt_from([20u64])));
-
-        // FIFO: first stored, first drained.
-        assert!(matches!(store.drain_for(0, 1), SimulatorHint::Riblt(_)));
-        assert!(matches!(store.drain_for(0, 1), SimulatorHint::Riblt(_)));
-        assert!(matches!(store.drain_for(0, 1), SimulatorHint::None));
     }
 }

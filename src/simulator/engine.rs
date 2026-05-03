@@ -13,8 +13,7 @@ use crate::simulator::replica::{Element, Replica, ReplicaPhase};
 use crate::simulator::topology::{Topology, TopologyKind};
 use crate::simulator::workload::{Workload, WorkloadConfig};
 
-use crate::simulator::network::{HintStore, Network, RecvView, SendView};
-use crate::simulator::protocols::messages::ProtocolMsg;
+use crate::simulator::network::{Network, ProtocolMsg, Outbox};
 use crate::simulator::protocols::{LocalMetrics, Protocol};
 
 use std::collections::HashSet;
@@ -34,7 +33,6 @@ pub struct Simulation {
     topology: Box<Topology>,
     protocol: Box<dyn Protocol>,
     network: Network<ProtocolMsg>,
-    hint_store: HintStore,
     metrics: MetricsCollector,
     target_union: HashSet<Element>,
     current_round: usize,
@@ -96,7 +94,6 @@ impl Simulation {
             topology,
             protocol,
             network,
-            hint_store: HintStore::new(),
             metrics: MetricsCollector::new(),
             target_union: workload.target_union,
             current_round: 0,
@@ -162,55 +159,48 @@ impl Simulation {
         self.mark_active();
 
         self.network.reset();
-        self.hint_store.reset();
 
         // Phase 1: every replica emits its outbound messages.
         {
-            let mut send_view = SendView::new(&mut self.network, &mut self.hint_store);
+            let mut outbox = Outbox::new(&mut self.network);
             for replica_id in 0..self.replicas.len() {
                 self.protocol.send_phase(
                     replica_id,
                     &self.replicas[replica_id],
                     &self.topology,
-                    &mut send_view,
+                    &mut outbox,
                 );
             }
         }
 
-        // Drain all inboxes and pair with hints.
-        let inboxes: Vec<_> = (0..self.replicas.len())
-            .map(|id| {
-                self.network
-                    .drain_inbox(id)
-                    .into_iter()
-                    .map(|(from, msg)| {
-                        let hint = self.hint_store.drain_for(from, id);
-                        (from, msg, hint)
-                    })
-                    .collect::<Vec<_>>()
-            })
+        // Drain all inboxes.
+        let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..self.replicas.len())
+            .map(|id| self.network.drain_inbox(id))
             .collect();
 
         // Phase 2: every replica reconciles from its inbox.
-        let recv_results: Vec<(HashSet<Element>, LocalMetrics)> = {
-            let mut recv_view = RecvView::new(&mut self.network);
-            inboxes
-                .into_iter()
-                .enumerate()
-                .map(|(replica_id, inbox)| {
-                    let result = self.protocol.recv_phase(
-                        replica_id,
-                        &self.replicas[replica_id],
-                        &self.topology,
-                        inbox,
-                        &mut recv_view,
-                    );
-                    (result.next_set, result.metrics)
-                })
-                .collect()
-        };
+        let recv_results: Vec<(HashSet<Element>, LocalMetrics)> = inboxes
+            .iter_mut()
+            .enumerate()
+            .map(|(replica_id, inbox)| {
+                let result = self.protocol.recv_phase(
+                    replica_id,
+                    &self.replicas[replica_id],
+                    &self.topology,
+                    inbox,
+                );
+                (result.next_set, result.metrics)
+            })
+            .collect();
 
-        // Snapshot AFTER recv_phase so decoded metadata is included.
+        // Bill metadata bytes off the post-recv message state — sketches
+        // and rateless filters reach their final wire size only after
+        // the receiver has decoded against / extended them.
+        for inbox in &inboxes {
+            self.network.bill_metadata_post_recv(inbox);
+        }
+
+        // Snapshot AFTER metadata billing so per-node totals are final.
         let stats = self.network.stats();
 
         // Apply results and bill bytes from Network::stats().

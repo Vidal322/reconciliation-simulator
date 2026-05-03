@@ -1,5 +1,4 @@
-use crate::simulator::network::{RecvView, SendView};
-use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
+use crate::simulator::network::{ProtocolMsg, Outbox};
 use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolKind, ProtocolStepResult};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
@@ -25,16 +24,11 @@ impl Protocol for MultiReplicaProtocol {
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
-        network: &mut SendView<ProtocolMsg>,
+        outbox: &mut Outbox<'_>,
     ) {
         let payload: Vec<Element> = local.set.iter().cloned().collect();
         for &neighbor_id in topology.neighbors(replica_id) {
-            network.send(
-                replica_id,
-                neighbor_id,
-                ProtocolMsg::Elements(payload.clone()),
-                SimulatorHint::None,
-            );
+            outbox.send_elements(replica_id, neighbor_id, payload.clone());
         }
     }
 
@@ -43,12 +37,11 @@ impl Protocol for MultiReplicaProtocol {
         _replica_id: usize,
         local: &Replica,
         _topology: &Topology,
-        inbox: Vec<(usize, ProtocolMsg, SimulatorHint)>,
-        _network: &mut RecvView<ProtocolMsg>,
+        inbox: &mut [(usize, ProtocolMsg)],
     ) -> ProtocolStepResult {
         let mut next_set = local.snapshot_set();
-        for (_from, msg, _hint) in inbox {
-            if let ProtocolMsg::Elements(els) = msg {
+        for (_from, msg) in inbox.iter_mut() {
+            if let Some(els) = msg.take_elements() {
                 for element in els {
                     next_set.insert(element);
                 }

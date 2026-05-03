@@ -1,7 +1,6 @@
 pub mod bf_iblt;
 pub mod full_state_transfer;
 pub mod hybrid_rbf_riblt;
-pub mod messages;
 pub mod multi_replica;
 pub mod riblt;
 
@@ -11,8 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::simulator::network::{RecvView, SendView};
-use crate::simulator::protocols::messages::{ProtocolMsg, SimulatorHint};
+use crate::simulator::network::{ProtocolMsg, Outbox};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
@@ -46,7 +44,7 @@ pub trait Protocol {
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
-        network: &mut SendView<ProtocolMsg>,
+        outbox: &mut Outbox<'_>,
     );
 
     fn recv_phase(
@@ -54,8 +52,7 @@ pub trait Protocol {
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
-        inbox: Vec<(usize, ProtocolMsg, SimulatorHint)>,
-        network: &mut RecvView<ProtocolMsg>,
+        inbox: &mut [(usize, ProtocolMsg)],
     ) -> ProtocolStepResult;
 }
 
