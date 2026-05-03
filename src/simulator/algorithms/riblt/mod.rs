@@ -377,6 +377,10 @@ impl<T: Symbol> RatelessIBLT<T> {
         }
     }
 
+    pub fn consumed_symbols(&self) -> usize {
+        self.sketch.coded_symbols.len()
+    }
+
     pub fn t_enc(&self) -> Duration {
         self.t_enc
     }
