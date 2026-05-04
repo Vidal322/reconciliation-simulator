@@ -14,7 +14,7 @@ use crate::simulator::topology::{Topology, TopologyKind};
 use crate::simulator::workload::{Workload, WorkloadConfig};
 
 use crate::simulator::network::{Network, ProtocolMsg, Outbox};
-use crate::simulator::protocols::{LocalMetrics, Protocol};
+use crate::simulator::protocols::{LocalMetrics, PendingElements, Protocol};
 
 use std::collections::HashSet;
 
@@ -36,6 +36,11 @@ pub struct Simulation {
     metrics: MetricsCollector,
     target_union: HashSet<Element>,
     current_round: usize,
+    /// Per-replica carry state. `carry_states[i]` holds whatever
+    /// `recv_phase` returned for replica `i` last round; it is moved into
+    /// that same replica's next `send_phase` and never observed by any
+    /// other replica.
+    carry_states: Vec<Option<PendingElements>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +93,7 @@ impl Simulation {
             ProtocolKind::StaticBfIblt => Box::new(StaticBfIbltProtocol::new()),
         };
 
+        let n = replicas.len();
         Self {
             config,
             replicas,
@@ -97,6 +103,7 @@ impl Simulation {
             metrics: MetricsCollector::new(),
             target_union: workload.target_union,
             current_round: 0,
+            carry_states: (0..n).map(|_| None).collect(),
         }
     }
 
@@ -160,15 +167,20 @@ impl Simulation {
 
         self.network.reset();
 
-        // Phase 1: every replica emits its outbound messages.
+        // Phase 1: every replica emits its outbound messages. Each
+        // replica's carry from the previous round is moved out of the
+        // engine and handed only to its own send_phase — no protocol
+        // call ever sees another replica's carry.
         {
             let mut outbox = Outbox::new(&mut self.network);
             for replica_id in 0..self.replicas.len() {
+                let carry = self.carry_states[replica_id].take();
                 self.protocol.send_phase(
                     replica_id,
                     &self.replicas[replica_id],
                     &self.topology,
                     &mut outbox,
+                    carry,
                 );
             }
         }
@@ -179,7 +191,7 @@ impl Simulation {
             .collect();
 
         // Phase 2: every replica reconciles from its inbox.
-        let recv_results: Vec<(HashSet<Element>, LocalMetrics)> = inboxes
+        let recv_results: Vec<(HashSet<Element>, LocalMetrics, Option<PendingElements>)> = inboxes
             .iter_mut()
             .enumerate()
             .map(|(replica_id, inbox)| {
@@ -189,7 +201,7 @@ impl Simulation {
                     &self.topology,
                     inbox,
                 );
-                (result.next_set, result.metrics)
+                (result.next_set, result.metrics, result.carry)
             })
             .collect();
 
@@ -203,8 +215,11 @@ impl Simulation {
         // Snapshot AFTER metadata billing so per-node totals are final.
         let stats = self.network.stats();
 
-        // Apply results and bill bytes from Network::stats().
-        for (replica_id, (replica, (next_set, local_metrics))) in
+        // Apply results and bill bytes from Network::stats(). Each
+        // replica's carry is stored back into its own slot in
+        // `carry_states`, ready to be handed only to its own next
+        // send_phase.
+        for (replica_id, (replica, (next_set, local_metrics, carry))) in
             self.replicas.iter_mut().zip(recv_results).enumerate()
         {
             let sent_state = stats.per_node_state[replica_id] as usize;
@@ -217,6 +232,8 @@ impl Simulation {
             let added = next_set.difference(&replica.set).count();
             replica.stats.record_elements_added(added);
             replica.set = next_set;
+
+            self.carry_states[replica_id] = carry;
         }
 
         if self.has_converged() {

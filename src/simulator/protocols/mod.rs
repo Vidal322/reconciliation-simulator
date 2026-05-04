@@ -4,7 +4,7 @@ pub mod hybrid_rbf_riblt;
 pub mod multi_replica;
 pub mod riblt;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::time::Duration;
 
@@ -13,6 +13,12 @@ use serde::{Deserialize, Serialize};
 use crate::simulator::network::{ProtocolMsg, Outbox};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
+
+/// Per-replica, cross-round carry state. Produced by `recv_phase` of round N
+/// and handed back to `send_phase` of round N+1 for the *same* replica.
+/// Routed exclusively by the engine; protocols never see another replica's
+/// carry.
+pub type PendingElements = HashMap<usize, Vec<Element>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProtocolKind {
@@ -45,6 +51,7 @@ pub trait Protocol {
         local: &Replica,
         topology: &Topology,
         outbox: &mut Outbox<'_>,
+        carry: Option<PendingElements>,
     );
 
     fn recv_phase(
@@ -60,6 +67,7 @@ pub trait Protocol {
 pub struct ProtocolStepResult {
     pub next_set: HashSet<Element>,
     pub metrics: LocalMetrics,
+    pub carry: Option<PendingElements>,
 }
 
 #[derive(Clone, Debug, Default)]

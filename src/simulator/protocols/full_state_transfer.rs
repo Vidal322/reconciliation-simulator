@@ -1,5 +1,7 @@
 use crate::simulator::network::{ProtocolMsg, Outbox};
-use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolKind, ProtocolStepResult};
+use crate::simulator::protocols::{
+    LocalMetrics, PendingElements, Protocol, ProtocolKind, ProtocolStepResult,
+};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
@@ -23,6 +25,7 @@ impl Protocol for FullStateTransfer {
         local: &Replica,
         topology: &Topology,
         outbox: &mut Outbox<'_>,
+        _carry: Option<PendingElements>,
     ) {
         let payload: Vec<Element> = local.set.iter().cloned().collect();
         for &neighbor_id in topology.neighbors(replica_id) {
@@ -49,6 +52,7 @@ impl Protocol for FullStateTransfer {
         ProtocolStepResult {
             next_set,
             metrics: LocalMetrics::default(),
+            carry: None,
         }
     }
 }
@@ -85,7 +89,7 @@ mod tests {
         {
             let mut outbox = Outbox::new(&mut network);
             for (id, replica) in replicas.iter().enumerate() {
-                protocol.send_phase(id, replica, &topology, &mut outbox);
+                protocol.send_phase(id, replica, &topology, &mut outbox, None);
             }
         }
 
@@ -114,7 +118,7 @@ mod tests {
         {
             let mut outbox = Outbox::new(&mut network);
             for (id, replica) in replicas.iter().enumerate() {
-                protocol.send_phase(id, replica, &topology, &mut outbox);
+                protocol.send_phase(id, replica, &topology, &mut outbox, None);
             }
         }
 

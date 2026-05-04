@@ -6,7 +6,9 @@ use crate::simulator::algorithms::rateless_bloom::expected_cost::ExpectedCostFac
 use crate::simulator::algorithms::rateless_bloom::{RatelessBF, StoppingStrategyFactory};
 use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::{ProtocolMsg, Outbox};
-use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolKind, ProtocolStepResult};
+use crate::simulator::protocols::{
+    LocalMetrics, PendingElements, Protocol, ProtocolKind, ProtocolStepResult,
+};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
@@ -66,6 +68,7 @@ impl Protocol for HybridRbfRibltProtocol {
         local: &Replica,
         topology: &Topology,
         outbox: &mut Outbox<'_>,
+        _carry: Option<PendingElements>,
     ) {
         let state = self.state.entry(replica_id).or_default();
 
@@ -162,6 +165,7 @@ impl Protocol for HybridRbfRibltProtocol {
                 decode_time,
                 false_matches,
             },
+            carry: None,
         }
     }
 }
@@ -184,7 +188,7 @@ mod tests {
             {
                 let mut outbox = Outbox::new(&mut network);
                 for id in 0..replicas.len() {
-                    protocol.send_phase(id, &replicas[id], &topology, &mut outbox);
+                    protocol.send_phase(id, &replicas[id], &topology, &mut outbox, None);
                 }
             }
             let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..replicas.len())
@@ -227,7 +231,7 @@ mod tests {
         {
             let mut outbox = Outbox::new(&mut network);
             for id in 0..replicas.len() {
-                protocol.send_phase(id, &replicas[id], &topology, &mut outbox);
+                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, None);
             }
         }
         let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..replicas.len())
@@ -244,7 +248,7 @@ mod tests {
         {
             let mut outbox = Outbox::new(&mut network);
             for id in 0..replicas.len() {
-                protocol.send_phase(id, &replicas[id], &topology, &mut outbox);
+                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, None);
             }
         }
         for id in 0..replicas.len() {

@@ -1,5 +1,7 @@
 use crate::simulator::network::{ProtocolMsg, Outbox};
-use crate::simulator::protocols::{LocalMetrics, Protocol, ProtocolKind, ProtocolStepResult};
+use crate::simulator::protocols::{
+    LocalMetrics, PendingElements, Protocol, ProtocolKind, ProtocolStepResult,
+};
 use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
@@ -25,6 +27,7 @@ impl Protocol for MultiReplicaProtocol {
         local: &Replica,
         topology: &Topology,
         outbox: &mut Outbox<'_>,
+        _carry: Option<PendingElements>,
     ) {
         let payload: Vec<Element> = local.set.iter().cloned().collect();
         for &neighbor_id in topology.neighbors(replica_id) {
@@ -51,6 +54,7 @@ impl Protocol for MultiReplicaProtocol {
         ProtocolStepResult {
             next_set,
             metrics: LocalMetrics::default(),
+            carry: None,
         }
     }
 }
