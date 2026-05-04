@@ -16,25 +16,19 @@ use crate::simulator::topology::Topology;
 ///     to every neighbour. Wire cost is zero at send and grows as the
 ///     receiver decodes against it; metadata is billed by the network
 ///     after `recv_phase` returns.
-///   - recv_phase decodes each incoming sketch and stashes the local-only
-///     elements per neighbour for the next send_phase.
+///   - recv_phase decodes each incoming sketch and returns the
+///     per-neighbour local-only elements as `carry`; the engine routes
+///     that carry back into this same replica's next `send_phase`.
 ///
 /// Round N+1:
-///   - send_phase drains the stash and emits Elements messages.
+///   - send_phase consumes the carry and emits Elements messages.
 ///   - recv_phase merges received elements into the local set.
 #[derive(Clone, Debug, Default)]
-pub struct RibltProtocol {
-    state: HashMap<usize, ReplicaState>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct ReplicaState {
-    pending: HashMap<usize, Vec<Element>>,
-}
+pub struct RibltProtocol;
 
 impl RibltProtocol {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
@@ -49,18 +43,17 @@ impl Protocol for RibltProtocol {
         local: &Replica,
         topology: &Topology,
         outbox: &mut Outbox<'_>,
-        _carry: Option<PendingElements>,
+        carry: Option<PendingElements>,
     ) {
-        let state = self.state.entry(replica_id).or_default();
+        let pending = carry.unwrap_or_default();
 
-        if state.pending.is_empty() {
+        if pending.is_empty() {
             let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
             for &neighbor_id in topology.neighbors(replica_id) {
                 let sender_riblt = RatelessIBLT::riblt_from(digests.iter().copied());
                 outbox.send_riblt(replica_id, neighbor_id, sender_riblt);
             }
         } else {
-            let pending = std::mem::take(&mut state.pending);
             for (neighbor_id, elements) in pending {
                 if !elements.is_empty() {
                     outbox.send_elements(replica_id, neighbor_id, elements);
@@ -71,7 +64,7 @@ impl Protocol for RibltProtocol {
 
     fn recv_phase(
         &mut self,
-        replica_id: usize,
+        _replica_id: usize,
         local: &Replica,
         _topology: &Topology,
         inbox: &mut [(usize, ProtocolMsg)],
@@ -82,7 +75,7 @@ impl Protocol for RibltProtocol {
         let mut encode_time = Duration::ZERO;
         let mut decode_time = Duration::ZERO;
 
-        let state = self.state.entry(replica_id).or_default();
+        let mut pending: PendingElements = HashMap::new();
 
         for (from, msg) in inbox.iter_mut() {
             if let Some(els) = msg.take_elements() {
@@ -112,7 +105,7 @@ impl Protocol for RibltProtocol {
                     .cloned()
                     .collect();
                 if !to_send.is_empty() {
-                    state.pending.entry(*from).or_default().extend(to_send);
+                    pending.entry(*from).or_default().extend(to_send);
                 }
             }
         }
@@ -124,7 +117,7 @@ impl Protocol for RibltProtocol {
                 decode_time,
                 false_matches: 0,
             },
-            carry: None,
+            carry: if pending.is_empty() { None } else { Some(pending) },
         }
     }
 }
@@ -142,31 +135,35 @@ mod tests {
         let topology = Topology::star(2);
         let mut replicas = vec![make_replica(0, &[1, 2, 3]), make_replica(1, &[2, 3, 4])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut carries: Vec<Option<PendingElements>> =
+            (0..replicas.len()).map(|_| None).collect();
 
         for _ in 0..2 {
             {
                 let mut outbox = Outbox::new(&mut network);
                 for id in 0..replicas.len() {
-                    protocol.send_phase(id, &replicas[id], &topology, &mut outbox, None);
+                    let carry = carries[id].take();
+                    protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
                 }
             }
             let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..replicas.len())
                 .map(|id| network.drain_inbox(id))
                 .collect();
-            let next_sets: Vec<_> = inboxes
+            let results: Vec<_> = inboxes
                 .iter_mut()
                 .enumerate()
                 .map(|(id, inbox)| {
-                    protocol
-                        .recv_phase(id, &replicas[id], &topology, inbox)
-                        .next_set
+                    protocol.recv_phase(id, &replicas[id], &topology, inbox)
                 })
                 .collect();
             for inbox in &inboxes {
                 network.bill_metadata_post_recv(inbox);
             }
-            for (replica, next) in replicas.iter_mut().zip(next_sets) {
-                replica.set = next;
+            for (id, (replica, result)) in
+                replicas.iter_mut().zip(results).enumerate()
+            {
+                replica.set = result.next_set;
+                carries[id] = result.carry;
             }
         }
 
@@ -186,29 +183,38 @@ mod tests {
         let topology = Topology::star(2);
         let replicas = vec![make_replica(0, &[5, 6, 7]), make_replica(1, &[5, 6, 7])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut carries: Vec<Option<PendingElements>> =
+            (0..replicas.len()).map(|_| None).collect();
 
         {
             let mut outbox = Outbox::new(&mut network);
             for id in 0..replicas.len() {
-                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, None);
+                let carry = carries[id].take();
+                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
             }
         }
         let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..replicas.len())
             .map(|id| network.drain_inbox(id))
             .collect();
         for (id, inbox) in inboxes.iter_mut().enumerate() {
-            let _ = protocol.recv_phase(id, &replicas[id], &topology, inbox);
+            let result = protocol.recv_phase(id, &replicas[id], &topology, inbox);
+            carries[id] = result.carry;
         }
         for inbox in &inboxes {
             network.bill_metadata_post_recv(inbox);
         }
+
+        // With identical sets, no carry should have been produced —
+        // recv_phase returned `carry: None` for every replica.
+        assert!(carries.iter().all(|c| c.is_none()));
 
         // Next send_phase should still emit only sketches (no elements pending).
         network.reset();
         {
             let mut outbox = Outbox::new(&mut network);
             for id in 0..replicas.len() {
-                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, None);
+                let carry = carries[id].take();
+                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
             }
         }
         for id in 0..replicas.len() {
