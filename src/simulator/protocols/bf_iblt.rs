@@ -11,15 +11,14 @@ use crate::simulator::replica::{Element, Replica};
 use crate::simulator::topology::Topology;
 
 /// Two-round Bloom Filter + IBLT reconciliation.
+///
+/// Round N: send_phase ships `(BloomFilter, RIBLT)` pairs; recv_phase
+/// resolves false positives via the RIBLT and returns the resulting
+/// per-neighbour local-only elements as `carry`.
+/// Round N+1: send_phase consumes the carry and emits Elements.
 #[derive(Clone, Debug)]
 pub struct StaticBfIbltProtocol {
     false_positive_rate: f64,
-    state: HashMap<usize, BfIbltState>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct BfIbltState {
-    pending: HashMap<usize, Vec<Element>>,
 }
 
 impl Default for StaticBfIbltProtocol {
@@ -32,7 +31,6 @@ impl StaticBfIbltProtocol {
     pub fn new() -> Self {
         Self {
             false_positive_rate: 0.01,
-            state: HashMap::new(),
         }
     }
 
@@ -43,7 +41,6 @@ impl StaticBfIbltProtocol {
         );
         Self {
             false_positive_rate,
-            state: HashMap::new(),
         }
     }
 }
@@ -59,11 +56,11 @@ impl Protocol for StaticBfIbltProtocol {
         local: &Replica,
         topology: &Topology,
         outbox: &mut Outbox<'_>,
-        _carry: Option<PendingElements>,
+        carry: Option<PendingElements>,
     ) {
-        let state = self.state.entry(replica_id).or_default();
+        let pending = carry.unwrap_or_default();
 
-        if state.pending.is_empty() {
+        if pending.is_empty() {
             let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
 
             for &neighbor_id in topology.neighbors(replica_id) {
@@ -76,7 +73,6 @@ impl Protocol for StaticBfIbltProtocol {
                 outbox.send_bloom_riblt(replica_id, neighbor_id, bf, riblt);
             }
         } else {
-            let pending = std::mem::take(&mut state.pending);
             for (neighbor_id, elements) in pending {
                 if !elements.is_empty() {
                     outbox.send_elements(replica_id, neighbor_id, elements);
@@ -87,7 +83,7 @@ impl Protocol for StaticBfIbltProtocol {
 
     fn recv_phase(
         &mut self,
-        replica_id: usize,
+        _replica_id: usize,
         local: &Replica,
         _topology: &Topology,
         inbox: &mut [(usize, ProtocolMsg)],
@@ -98,7 +94,7 @@ impl Protocol for StaticBfIbltProtocol {
         let mut decode_time = Duration::ZERO;
         let mut false_matches = 0usize;
 
-        let state = self.state.entry(replica_id).or_default();
+        let mut pending: PendingElements = HashMap::new();
 
         for (from, msg) in inbox.iter_mut() {
             if let Some(els) = msg.take_elements() {
@@ -148,7 +144,7 @@ impl Protocol for StaticBfIbltProtocol {
                     .cloned()
                     .collect();
                 if !to_send.is_empty() {
-                    state.pending.entry(*from).or_default().extend(to_send);
+                    pending.entry(*from).or_default().extend(to_send);
                 }
             }
         }
@@ -160,7 +156,7 @@ impl Protocol for StaticBfIbltProtocol {
                 decode_time,
                 false_matches,
             },
-            carry: None,
+            carry: if pending.is_empty() { None } else { Some(pending) },
         }
     }
 }
@@ -178,31 +174,35 @@ mod tests {
         let topology = Topology::star(2);
         let mut replicas = vec![make_replica(0, &[1, 2, 3]), make_replica(1, &[2, 3, 4])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut carries: Vec<Option<PendingElements>> =
+            (0..replicas.len()).map(|_| None).collect();
 
         for _ in 0..2 {
             {
                 let mut outbox = Outbox::new(&mut network);
                 for id in 0..replicas.len() {
-                    protocol.send_phase(id, &replicas[id], &topology, &mut outbox, None);
+                    let carry = carries[id].take();
+                    protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
                 }
             }
             let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..replicas.len())
                 .map(|id| network.drain_inbox(id))
                 .collect();
-            let next_sets: Vec<_> = inboxes
+            let results: Vec<_> = inboxes
                 .iter_mut()
                 .enumerate()
                 .map(|(id, inbox)| {
-                    protocol
-                        .recv_phase(id, &replicas[id], &topology, inbox)
-                        .next_set
+                    protocol.recv_phase(id, &replicas[id], &topology, inbox)
                 })
                 .collect();
             for inbox in &inboxes {
                 network.bill_metadata_post_recv(inbox);
             }
-            for (replica, next) in replicas.iter_mut().zip(next_sets) {
-                replica.set = next;
+            for (id, (replica, result)) in
+                replicas.iter_mut().zip(results).enumerate()
+            {
+                replica.set = result.next_set;
+                carries[id] = result.carry;
             }
         }
 
@@ -222,28 +222,37 @@ mod tests {
         let topology = Topology::star(2);
         let replicas = vec![make_replica(0, &[5, 6, 7]), make_replica(1, &[5, 6, 7])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
+        let mut carries: Vec<Option<PendingElements>> =
+            (0..replicas.len()).map(|_| None).collect();
 
         {
             let mut outbox = Outbox::new(&mut network);
             for id in 0..replicas.len() {
-                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, None);
+                let carry = carries[id].take();
+                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
             }
         }
         let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..replicas.len())
             .map(|id| network.drain_inbox(id))
             .collect();
         for (id, inbox) in inboxes.iter_mut().enumerate() {
-            let _ = protocol.recv_phase(id, &replicas[id], &topology, inbox);
+            let result = protocol.recv_phase(id, &replicas[id], &topology, inbox);
+            carries[id] = result.carry;
         }
         for inbox in &inboxes {
             network.bill_metadata_post_recv(inbox);
         }
 
+        // With identical sets, the BF resolves every probe to a true
+        // negative on the receiver side, so no carry is produced.
+        assert!(carries.iter().all(|c| c.is_none()));
+
         network.reset();
         {
             let mut outbox = Outbox::new(&mut network);
             for id in 0..replicas.len() {
-                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, None);
+                let carry = carries[id].take();
+                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
             }
         }
         for id in 0..replicas.len() {
