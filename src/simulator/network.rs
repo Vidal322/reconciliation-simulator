@@ -353,16 +353,20 @@ fn rateless_bloom_wire_bytes(r: &RatelessBloomMsg) -> u64 {
 
 pub struct Outbox<'a> {
     network: &'a mut Network<ProtocolMsg>,
+    from: usize,
 }
 
 impl<'a> Outbox<'a> {
-    pub fn new(network: &'a mut Network<ProtocolMsg>) -> Self {
-        Self { network }
+    /// Bind this outbox to a specific sender. The engine constructs one
+    /// per replica per round; protocols receive it already bound and
+    /// cannot supply a different `from`.
+    pub fn for_replica(network: &'a mut Network<ProtocolMsg>, from: usize) -> Self {
+        Self { network, from }
     }
 
-    pub fn send_elements(&mut self, from: usize, to: usize, elements: Vec<Element>) {
+    pub fn send_elements(&mut self, _from: usize, to: usize, elements: Vec<Element>) {
         self.network.send(
-            from,
+            self.from,
             to,
             ProtocolMsg {
                 inner: ProtocolMsgInner::Elements(elements),
@@ -370,9 +374,9 @@ impl<'a> Outbox<'a> {
         );
     }
 
-    pub fn send_riblt(&mut self, from: usize, to: usize, riblt: RatelessIBLT<u64>) {
+    pub fn send_riblt(&mut self, _from: usize, to: usize, riblt: RatelessIBLT<u64>) {
         self.network.send(
-            from,
+            self.from,
             to,
             ProtocolMsg {
                 inner: ProtocolMsgInner::Riblt(RibltMsg::new(riblt)),
@@ -380,9 +384,9 @@ impl<'a> Outbox<'a> {
         );
     }
 
-    pub fn send_bloom(&mut self, from: usize, to: usize, bloom: BloomFilter<u64>) {
+    pub fn send_bloom(&mut self, _from: usize, to: usize, bloom: BloomFilter<u64>) {
         self.network.send(
-            from,
+            self.from,
             to,
             ProtocolMsg {
                 inner: ProtocolMsgInner::Bloom(BloomMsg::new(bloom)),
@@ -390,9 +394,9 @@ impl<'a> Outbox<'a> {
         );
     }
 
-    pub fn send_rateless_bloom(&mut self, from: usize, to: usize, bf: RatelessBF<u64>) {
+    pub fn send_rateless_bloom(&mut self, _from: usize, to: usize, bf: RatelessBF<u64>) {
         self.network.send(
-            from,
+            self.from,
             to,
             ProtocolMsg {
                 inner: ProtocolMsgInner::RatelessBloom(RatelessBloomMsg::new(bf)),
@@ -402,13 +406,13 @@ impl<'a> Outbox<'a> {
 
     pub fn send_bloom_riblt(
         &mut self,
-        from: usize,
+        _from: usize,
         to: usize,
         bloom: BloomFilter<u64>,
         riblt: RatelessIBLT<u64>,
     ) {
         self.network.send(
-            from,
+            self.from,
             to,
             ProtocolMsg {
                 inner: ProtocolMsgInner::BloomRiblt {
@@ -421,13 +425,13 @@ impl<'a> Outbox<'a> {
 
     pub fn send_rateless_bloom_riblt(
         &mut self,
-        from: usize,
+        _from: usize,
         to: usize,
         bf: RatelessBF<u64>,
         riblt: RatelessIBLT<u64>,
     ) {
         self.network.send(
-            from,
+            self.from,
             to,
             ProtocolMsg {
                 inner: ProtocolMsgInner::RatelessBloomRiblt {

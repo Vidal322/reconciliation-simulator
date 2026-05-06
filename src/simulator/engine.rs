@@ -170,19 +170,19 @@ impl Simulation {
         // Phase 1: every replica emits its outbound messages. Each
         // replica's carry from the previous round is moved out of the
         // engine and handed only to its own send_phase — no protocol
-        // call ever sees another replica's carry.
-        {
-            let mut outbox = Outbox::new(&mut self.network);
-            for replica_id in 0..self.replicas.len() {
-                let carry = self.carry_states[replica_id].take();
-                self.protocol.send_phase(
-                    replica_id,
-                    &self.replicas[replica_id],
-                    &self.topology,
-                    &mut outbox,
-                    carry,
-                );
-            }
+        // call ever sees another replica's carry. Each outbox is bound
+        // to its replica at construction; a protocol cannot attribute
+        // a message to a different sender.
+        for replica_id in 0..self.replicas.len() {
+            let carry = self.carry_states[replica_id].take();
+            let mut outbox = Outbox::for_replica(&mut self.network, replica_id);
+            self.protocol.send_phase(
+                replica_id,
+                &self.replicas[replica_id],
+                &self.topology,
+                &mut outbox,
+                carry,
+            );
         }
 
         // Drain all inboxes.

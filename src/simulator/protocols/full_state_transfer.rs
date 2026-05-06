@@ -86,11 +86,9 @@ mod tests {
         ];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
 
-        {
-            let mut outbox = Outbox::new(&mut network);
-            for (id, replica) in replicas.iter().enumerate() {
-                protocol.send_phase(id, replica, &topology, &mut outbox, None);
-            }
+        for (id, replica) in replicas.iter().enumerate() {
+            let mut outbox = Outbox::for_replica(&mut network, id);
+            protocol.send_phase(id, replica, &topology, &mut outbox, None);
         }
 
         let expected_node0 = (std::mem::size_of::<u64>() + 4) as u64;
@@ -115,11 +113,9 @@ mod tests {
         ];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
 
-        {
-            let mut outbox = Outbox::new(&mut network);
-            for (id, replica) in replicas.iter().enumerate() {
-                protocol.send_phase(id, replica, &topology, &mut outbox, None);
-            }
+        for (id, replica) in replicas.iter().enumerate() {
+            let mut outbox = Outbox::for_replica(&mut network, id);
+            protocol.send_phase(id, replica, &topology, &mut outbox, None);
         }
 
         let mut inbox_0: Vec<(usize, ProtocolMsg)> = network.drain_inbox(0);

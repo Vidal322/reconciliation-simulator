@@ -140,9 +140,9 @@ mod tests {
 
         for _ in 0..2 {
             {
-                let mut outbox = Outbox::new(&mut network);
                 for id in 0..replicas.len() {
                     let carry = carries[id].take();
+                    let mut outbox = Outbox::for_replica(&mut network, id);
                     protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
                 }
             }
@@ -186,12 +186,10 @@ mod tests {
         let mut carries: Vec<Option<PendingElements>> =
             (0..replicas.len()).map(|_| None).collect();
 
-        {
-            let mut outbox = Outbox::new(&mut network);
-            for id in 0..replicas.len() {
-                let carry = carries[id].take();
-                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
-            }
+        for id in 0..replicas.len() {
+            let carry = carries[id].take();
+            let mut outbox = Outbox::for_replica(&mut network, id);
+            protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
         }
         let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..replicas.len())
             .map(|id| network.drain_inbox(id))
@@ -210,12 +208,10 @@ mod tests {
 
         // Next send_phase should still emit only sketches (no elements pending).
         network.reset();
-        {
-            let mut outbox = Outbox::new(&mut network);
-            for id in 0..replicas.len() {
-                let carry = carries[id].take();
-                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
-            }
+        for id in 0..replicas.len() {
+            let carry = carries[id].take();
+            let mut outbox = Outbox::for_replica(&mut network, id);
+            protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
         }
         for id in 0..replicas.len() {
             for (_from, mut msg) in network.drain_inbox(id) {
