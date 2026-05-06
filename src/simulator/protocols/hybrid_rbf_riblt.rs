@@ -56,7 +56,7 @@ impl Protocol for HybridRbfRibltProtocol {
     }
 
     fn send_phase(
-        &mut self,
+        &self,
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
@@ -84,7 +84,7 @@ impl Protocol for HybridRbfRibltProtocol {
     }
 
     fn recv_phase(
-        &mut self,
+        &self,
         _replica_id: usize,
         local: &Replica,
         _topology: &Topology,
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn hybrid_converges_in_two_rounds() {
-        let mut protocol = HybridRbfRibltProtocol::new();
+        let protocol = HybridRbfRibltProtocol::new();
         let topology = Topology::star(2);
         let mut replicas = vec![make_replica(0, &[1, 2, 3]), make_replica(1, &[2, 3, 4])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn hybrid_identical_sets_no_elements_sent() {
-        let mut protocol = HybridRbfRibltProtocol::new();
+        let protocol = HybridRbfRibltProtocol::new();
         let topology = Topology::star(2);
         let replicas = vec![make_replica(0, &[5, 6, 7]), make_replica(1, &[5, 6, 7])];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);

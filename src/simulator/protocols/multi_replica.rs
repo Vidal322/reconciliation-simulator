@@ -22,7 +22,7 @@ impl Protocol for MultiReplicaProtocol {
     }
 
     fn send_phase(
-        &mut self,
+        &self,
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
@@ -36,7 +36,7 @@ impl Protocol for MultiReplicaProtocol {
     }
 
     fn recv_phase(
-        &mut self,
+        &self,
         _replica_id: usize,
         local: &Replica,
         _topology: &Topology,

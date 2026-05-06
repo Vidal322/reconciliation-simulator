@@ -46,7 +46,7 @@ pub trait Protocol {
     fn kind(&self) -> ProtocolKind;
 
     fn send_phase(
-        &mut self,
+        &self,
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
@@ -55,7 +55,7 @@ pub trait Protocol {
     );
 
     fn recv_phase(
-        &mut self,
+        &self,
         replica_id: usize,
         local: &Replica,
         topology: &Topology,

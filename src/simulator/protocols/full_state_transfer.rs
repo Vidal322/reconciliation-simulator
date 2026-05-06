@@ -20,7 +20,7 @@ impl Protocol for FullStateTransfer {
     }
 
     fn send_phase(
-        &mut self,
+        &self,
         replica_id: usize,
         local: &Replica,
         topology: &Topology,
@@ -34,7 +34,7 @@ impl Protocol for FullStateTransfer {
     }
 
     fn recv_phase(
-        &mut self,
+        &self,
         _replica_id: usize,
         local: &Replica,
         _topology: &Topology,
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn full_state_transfer_bills_full_neighbour_set() {
-        let mut protocol = FullStateTransfer::new();
+        let protocol = FullStateTransfer::new();
         let topology = Topology::star(2);
         let replicas = vec![
             make_replica(0, vec![make_element(1, 1, 4)]),
@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn full_state_transfer_recv_merges_neighbours() {
-        let mut protocol = FullStateTransfer::new();
+        let protocol = FullStateTransfer::new();
         let topology = Topology::star(2);
         let replicas = vec![
             make_replica(0, vec![make_element(1, 1, 4), make_element(2, 2, 4)]),
