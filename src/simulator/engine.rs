@@ -245,14 +245,6 @@ impl Simulation {
         &self.topology
     }
 
-    pub fn protocol(&self) -> ProtocolKind {
-        self.protocol.kind()
-    }
-
-    pub fn current_round(&self) -> usize {
-        self.current_round
-    }
-
     pub fn target_union(&self) -> &HashSet<Element> {
         &self.target_union
     }

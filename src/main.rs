@@ -38,10 +38,7 @@ fn print_human(result: &SimulationResult, simulation: &Simulation) {
         result.metrics.total_elements_added
     );
 
-    let total_sent =
-        result.metrics.total_state_bytes_sent + result.metrics.total_metadata_bytes_sent;
-
-    println!("Total bytes sent:    {}", total_sent);
+    println!("Total bytes sent:    {}", result.metrics.total_bytes_sent());
 
     println!("\n--- Per-node Metrics ---");
     for node in &result.metrics.per_node {

@@ -76,8 +76,9 @@ impl<T: Hash + Clone> StoppingStrategy<T> for ExpectedCost<T> {
             if new_negatives >= threshold {
                 return None;
             }
-            return Some((self.positives.clone(), self.negatives.clone()));
+            Some((self.positives.clone(), self.negatives.clone()))
+        } else {
+            None
         }
-        None
     }
 }

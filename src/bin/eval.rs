@@ -37,7 +37,7 @@ struct EvalWorkload {
 impl EvalWorkload {
     fn to_workload(&self, jaccard_similarity: f64, num_replicas: usize) -> WorkloadConfig {
         WorkloadConfig {
-            num_replicas: num_replicas,
+            num_replicas,
             set_size: self.set_size,
             payload_size: self.payload_size,
             digest_bits: self.digest_bits,
@@ -110,16 +110,15 @@ fn create_run_entry(
     };
     let mut sim = Simulation::new(sim_config);
     let result = sim.run();
-    let total = result.metrics.total_state_bytes_sent + result.metrics.total_metadata_bytes_sent;
 
     RunEntry {
         topology: topo,
         jaccard_similarity: jaccard_index,
-        num_replicas: num_replicas,
+        num_replicas,
         seed,
         converged: result.converged,
         rounds: result.rounds,
-        total_bytes_sent: total,
+        total_bytes_sent: result.metrics.total_bytes_sent(),
         state_bytes_sent: result.metrics.total_state_bytes_sent,
         metadata_bytes_sent: result.metrics.total_metadata_bytes_sent,
     }

@@ -30,8 +30,8 @@ where
             "false positive rate should be in (0, 1)"
         );
 
-        let m = (-1.0f64 * capacity as f64 * fpr.ln() / (LN_2 * LN_2)).ceil() as usize;
-        let k = (-1.0f64 * fpr.ln() / LN_2).ceil() as u64;
+        let m = (-(capacity as f64) * fpr.ln() / (LN_2 * LN_2)).ceil() as usize;
+        let k = (-fpr.ln() / LN_2).ceil() as u64;
 
         Self {
             base: bitvec![0; max(m, 1)],

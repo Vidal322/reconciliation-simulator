@@ -38,7 +38,7 @@ pub fn numeric_posterior_tail(
         ln_comb + (k as f64) * p.ln() + ((n - k) as f64) * (1.0 - p).ln()
     }
 
-    let prior = 1.0 / ((imax - 0 + 1) as f64);
+    let prior = 1.0 / ((imax + 1) as f64);
     let mut numerator = 0.0;
     let mut denominator = 0.0;
 

@@ -87,6 +87,6 @@ impl<T: Hash + Clone> StoppingStrategy<T> for AngleHeuristic<T> {
             return None;
         }
 
-        return Some((self.positives.clone(), self.negatives.clone()));
+        Some((self.positives.clone(), self.negatives.clone()))
     }
 }

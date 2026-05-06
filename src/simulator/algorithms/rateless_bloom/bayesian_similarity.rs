@@ -155,6 +155,6 @@ impl<T: Hash + Clone> StoppingStrategy<T> for BayesianSimilarity<T> {
         positives.extend(self.sampled_positives.clone());
         negatives.extend(self.sampled_negatives.clone());
 
-        return Some((positives, negatives));
+        Some((positives, negatives))
     }
 }

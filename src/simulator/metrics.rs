@@ -26,6 +26,14 @@ pub struct MetricsSnapshot {
     pub per_node: Vec<NodeMetrics>,
 }
 
+impl MetricsSnapshot {
+    /// Sum of state and metadata bytes sent across all replicas.
+    /// This is the scalar the eval fitness function consumes.
+    pub fn total_bytes_sent(&self) -> usize {
+        self.total_state_bytes_sent + self.total_metadata_bytes_sent
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct MetricsCollector {
     rounds: usize,
