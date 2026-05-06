@@ -179,12 +179,10 @@ mod tests {
             (0..replicas.len()).map(|_| None).collect();
 
         for _ in 0..2 {
-            {
-                for id in 0..replicas.len() {
-                    let carry = carries[id].take();
-                    let mut outbox = Outbox::for_replica(&mut network, id);
-                    protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
-                }
+            for id in 0..replicas.len() {
+                let carry = carries[id].take();
+                let mut outbox = Outbox::for_replica(&mut network, id);
+                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
             }
             let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..replicas.len())
                 .map(|id| network.drain_inbox(id))
