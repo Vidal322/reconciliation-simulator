@@ -43,12 +43,6 @@ pub struct Simulation {
     carry_states: Vec<Option<PendingElements>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RunStatus {
-    Converged,
-    RoundCapReached,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RoundOutcome {
     Continue,
@@ -58,7 +52,6 @@ pub enum RoundOutcome {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimulationResult {
-    pub status: RunStatus,
     pub rounds: usize,
     pub num_replicas: usize,
     pub topology: TopologyKind,
@@ -113,7 +106,6 @@ impl Simulation {
             let metrics = self.finalize_metrics();
 
             return SimulationResult {
-                status: RunStatus::Converged,
                 rounds: self.current_round,
                 num_replicas: self.replicas.len(),
                 topology: self.config.topology,
@@ -131,7 +123,6 @@ impl Simulation {
                     let metrics = self.finalize_metrics();
 
                     return SimulationResult {
-                        status: RunStatus::Converged,
                         rounds: self.current_round,
                         num_replicas: self.replicas.len(),
                         topology: self.config.topology,
@@ -144,7 +135,6 @@ impl Simulation {
                     let metrics = self.finalize_metrics();
 
                     return SimulationResult {
-                        status: RunStatus::RoundCapReached,
                         rounds: self.current_round,
                         num_replicas: self.replicas.len(),
                         topology: self.config.topology,

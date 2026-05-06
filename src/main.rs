@@ -11,7 +11,6 @@ fn print_human(result: &SimulationResult, simulation: &Simulation) {
     println!("Protocol: {:?}", result.protocol);
     println!("Topology: {:?}", result.topology);
     println!("Converged: {}", result.converged);
-    println!("Status: {:?}", result.status);
     println!("Rounds: {}", result.rounds);
     println!("Replicas: {}", result.num_replicas);
     println!("Target union size: {}", simulation.target_union().len());
