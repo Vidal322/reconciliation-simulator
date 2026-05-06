@@ -92,7 +92,6 @@ impl Protocol for HybridRbfRibltProtocol {
 
         let mut encode_time = Duration::ZERO;
         let mut decode_time = Duration::ZERO;
-        let mut false_matches = 0usize;
 
         let mut pending: PendingElements = HashMap::new();
 
@@ -129,9 +128,7 @@ impl Protocol for HybridRbfRibltProtocol {
                     encode_time += sender_riblt.t_enc();
                     decode_time += sender_riblt.t_dec();
 
-                    let riblt_local_only = sender_riblt.remote_only();
-                    false_matches += riblt_local_only.len();
-                    recovered_local_only.extend(riblt_local_only);
+                    recovered_local_only.extend(sender_riblt.remote_only());
                 }
 
                 let local_only_set: std::collections::HashSet<u64> =
@@ -153,7 +150,6 @@ impl Protocol for HybridRbfRibltProtocol {
             metrics: LocalMetrics {
                 encode_time,
                 decode_time,
-                false_matches,
             },
             carry: if pending.is_empty() { None } else { Some(pending) },
         }

@@ -72,7 +72,6 @@ pub struct ProtocolStepResult {
 pub struct LocalMetrics {
     pub encode_time: Duration,
     pub decode_time: Duration,
-    pub false_matches: usize,
 }
 
 #[cfg(test)]

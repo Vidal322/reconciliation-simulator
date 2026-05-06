@@ -113,7 +113,6 @@ impl Protocol for RibltProtocol {
             metrics: LocalMetrics {
                 encode_time,
                 decode_time,
-                false_matches: 0,
             },
             carry: if pending.is_empty() { None } else { Some(pending) },
         }
