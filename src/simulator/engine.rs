@@ -99,48 +99,30 @@ impl Simulation {
 
     pub fn run(&mut self) -> SimulationResult {
         if self.has_converged() {
-            self.mark_converged();
-            let metrics = self.finalize_metrics();
-
-            return SimulationResult {
-                rounds: self.current_round,
-                num_replicas: self.replicas.len(),
-                topology: self.config.topology,
-                protocol: self.config.protocol,
-                converged: true,
-                metrics,
-            };
+            return self.finish(true);
         }
 
         loop {
             match self.step() {
                 RoundOutcome::Continue => {}
-                RoundOutcome::Converged => {
-                    self.mark_converged();
-                    let metrics = self.finalize_metrics();
-
-                    return SimulationResult {
-                        rounds: self.current_round,
-                        num_replicas: self.replicas.len(),
-                        topology: self.config.topology,
-                        protocol: self.config.protocol,
-                        converged: true,
-                        metrics,
-                    };
-                }
-                RoundOutcome::RoundCapReached => {
-                    let metrics = self.finalize_metrics();
-
-                    return SimulationResult {
-                        rounds: self.current_round,
-                        num_replicas: self.replicas.len(),
-                        topology: self.config.topology,
-                        protocol: self.config.protocol,
-                        converged: false,
-                        metrics,
-                    };
-                }
+                RoundOutcome::Converged => return self.finish(true),
+                RoundOutcome::RoundCapReached => return self.finish(false),
             }
+        }
+    }
+
+    fn finish(&mut self, converged: bool) -> SimulationResult {
+        if converged {
+            self.mark_converged();
+        }
+        let metrics = self.finalize_metrics();
+        SimulationResult {
+            rounds: self.current_round,
+            num_replicas: self.replicas.len(),
+            topology: self.config.topology,
+            protocol: self.config.protocol,
+            converged,
+            metrics,
         }
     }
 
