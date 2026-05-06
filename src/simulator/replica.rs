@@ -12,10 +12,6 @@ impl Element {
         Self { digest, payload }
     }
 
-    pub fn payload_len(&self) -> usize {
-        self.payload.len()
-    }
-
     /// Serialised byte size: 8-byte digest + payload bytes.
     pub fn wire_size(&self) -> usize {
         std::mem::size_of::<u64>() + self.payload.len()
@@ -28,7 +24,6 @@ pub enum ReplicaPhase {
     Idle,
     Active,
     Converged,
-    Failed,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -97,33 +92,6 @@ impl Replica {
 
     pub fn len(&self) -> usize {
         self.set.len()
-    }
-
-    pub fn extend<I>(&mut self, elements: I) -> usize
-    where
-        I: IntoIterator<Item = Element>,
-    {
-        let mut added = 0;
-
-        for element in elements {
-            if self.set.insert(element) {
-                added += 1;
-            }
-        }
-
-        if added > 0 {
-            self.stats.record_elements_added(added);
-        }
-
-        added
-    }
-
-    pub fn snapshot_set(&self) -> HashSet<Element> {
-        self.set.clone()
-    }
-
-    pub fn snapshot_digests(&self) -> Vec<u64> {
-        self.set.iter().map(|e| e.digest).collect()
     }
 
     pub fn view(&self) -> ReplicaView<'_> {
