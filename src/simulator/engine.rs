@@ -30,7 +30,7 @@ pub struct SimulationConfig {
 pub struct Simulation {
     config: SimulationConfig,
     replicas: Vec<Replica>,
-    topology: Box<Topology>,
+    topology: Topology,
     protocol: Box<dyn Protocol>,
     network: Network<ProtocolMsg>,
     metrics: MetricsCollector,
@@ -71,10 +71,7 @@ impl Simulation {
             .map(|(id, set)| Replica::new(id, set))
             .collect::<Vec<_>>();
 
-        let topology = Box::new(Topology::build(
-            config.topology,
-            config.workload.num_replicas,
-        ));
+        let topology = Topology::build(config.topology, config.workload.num_replicas);
 
         let network = Network::from_topology(&topology);
 
