@@ -51,12 +51,12 @@ impl Protocol for RibltProtocol {
             let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
             for &neighbor_id in topology.neighbors(replica_id) {
                 let sender_riblt = RatelessIBLT::riblt_from(digests.iter().copied());
-                outbox.send_riblt(replica_id, neighbor_id, sender_riblt);
+                outbox.send_riblt(neighbor_id, sender_riblt);
             }
         } else {
             for (neighbor_id, elements) in pending {
                 if !elements.is_empty() {
-                    outbox.send_elements(replica_id, neighbor_id, elements);
+                    outbox.send_elements(neighbor_id, elements);
                 }
             }
         }

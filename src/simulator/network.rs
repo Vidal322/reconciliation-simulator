@@ -364,7 +364,7 @@ impl<'a> Outbox<'a> {
         Self { network, from }
     }
 
-    pub fn send_elements(&mut self, _from: usize, to: usize, elements: Vec<Element>) {
+    pub fn send_elements(&mut self, to: usize, elements: Vec<Element>) {
         self.network.send(
             self.from,
             to,
@@ -374,7 +374,7 @@ impl<'a> Outbox<'a> {
         );
     }
 
-    pub fn send_riblt(&mut self, _from: usize, to: usize, riblt: RatelessIBLT<u64>) {
+    pub fn send_riblt(&mut self, to: usize, riblt: RatelessIBLT<u64>) {
         self.network.send(
             self.from,
             to,
@@ -384,7 +384,7 @@ impl<'a> Outbox<'a> {
         );
     }
 
-    pub fn send_bloom(&mut self, _from: usize, to: usize, bloom: BloomFilter<u64>) {
+    pub fn send_bloom(&mut self, to: usize, bloom: BloomFilter<u64>) {
         self.network.send(
             self.from,
             to,
@@ -394,7 +394,7 @@ impl<'a> Outbox<'a> {
         );
     }
 
-    pub fn send_rateless_bloom(&mut self, _from: usize, to: usize, bf: RatelessBF<u64>) {
+    pub fn send_rateless_bloom(&mut self, to: usize, bf: RatelessBF<u64>) {
         self.network.send(
             self.from,
             to,
@@ -406,7 +406,6 @@ impl<'a> Outbox<'a> {
 
     pub fn send_bloom_riblt(
         &mut self,
-        _from: usize,
         to: usize,
         bloom: BloomFilter<u64>,
         riblt: RatelessIBLT<u64>,
@@ -425,7 +424,6 @@ impl<'a> Outbox<'a> {
 
     pub fn send_rateless_bloom_riblt(
         &mut self,
-        _from: usize,
         to: usize,
         bf: RatelessBF<u64>,
         riblt: RatelessIBLT<u64>,

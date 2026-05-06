@@ -70,12 +70,12 @@ impl Protocol for StaticBfIbltProtocol {
                     bf.timed_insert(d);
                 }
                 let riblt = RatelessIBLT::riblt_from(digests.iter().copied());
-                outbox.send_bloom_riblt(replica_id, neighbor_id, bf, riblt);
+                outbox.send_bloom_riblt(neighbor_id, bf, riblt);
             }
         } else {
             for (neighbor_id, elements) in pending {
                 if !elements.is_empty() {
-                    outbox.send_elements(replica_id, neighbor_id, elements);
+                    outbox.send_elements(neighbor_id, elements);
                 }
             }
         }

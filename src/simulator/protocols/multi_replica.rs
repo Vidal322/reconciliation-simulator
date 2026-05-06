@@ -31,7 +31,7 @@ impl Protocol for MultiReplicaProtocol {
     ) {
         let payload: Vec<Element> = local.set.iter().cloned().collect();
         for &neighbor_id in topology.neighbors(replica_id) {
-            outbox.send_elements(replica_id, neighbor_id, payload.clone());
+            outbox.send_elements(neighbor_id, payload.clone());
         }
     }
 
