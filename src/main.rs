@@ -19,51 +19,38 @@ fn print_human(result: &SimulationResult, simulation: &Simulation) {
 
     println!("\n--- Aggregate Metrics ---");
     println!(
-        "State bytes sent:       {}",
+        "State bytes sent:    {}",
         result.metrics.total_state_bytes_sent
     );
     println!(
-        "State bytes received:   {}",
-        result.metrics.total_state_bytes_received
-    );
-    println!(
-        "Metadata bytes sent:    {}",
+        "Metadata bytes sent: {}",
         result.metrics.total_metadata_bytes_sent
     );
     println!(
-        "Metadata bytes received:{}",
-        result.metrics.total_metadata_bytes_received
-    );
-    println!(
-        "Encode time:            {:?}",
+        "Encode time:         {:?}",
         result.metrics.total_encode_time
     );
     println!(
-        "Decode time:            {:?}",
+        "Decode time:         {:?}",
         result.metrics.total_decode_time
     );
     println!(
-        "Elements added:         {}",
+        "Elements added:      {}",
         result.metrics.total_elements_added
     );
 
     let total_sent =
         result.metrics.total_state_bytes_sent + result.metrics.total_metadata_bytes_sent;
-    let total_received =
-        result.metrics.total_state_bytes_received + result.metrics.total_metadata_bytes_received;
 
-    println!("Total bytes sent:       {}", total_sent);
-    println!("Total bytes received:   {}", total_received);
+    println!("Total bytes sent:    {}", total_sent);
 
     println!("\n--- Per-node Metrics ---");
     for node in &result.metrics.per_node {
         println!(
-            "Replica {} -> state_sent={}, state_recv={}, meta_sent={}, meta_recv={}, enc={:?}, dec={:?}, added={}",
+            "Replica {} -> state_sent={}, meta_sent={}, enc={:?}, dec={:?}, added={}",
             node.replica_id,
             node.state_bytes_sent,
-            node.state_bytes_received,
             node.metadata_bytes_sent,
-            node.metadata_bytes_received,
             node.encode_time,
             node.decode_time,
             node.elements_added

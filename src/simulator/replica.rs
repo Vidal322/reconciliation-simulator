@@ -34,9 +34,7 @@ pub enum ReplicaPhase {
 #[derive(Clone, Debug, Default)]
 pub struct ReplicaStats {
     pub state_bytes_sent: usize,
-    pub state_bytes_received: usize,
     pub metadata_bytes_sent: usize,
-    pub metadata_bytes_received: usize,
     pub encode_time: Duration,
     pub decode_time: Duration,
     pub elements_added: usize,
@@ -47,16 +45,8 @@ impl ReplicaStats {
         self.state_bytes_sent += bytes;
     }
 
-    pub fn record_state_bytes_received(&mut self, bytes: usize) {
-        self.state_bytes_received += bytes;
-    }
-
     pub fn record_metadata_bytes_sent(&mut self, bytes: usize) {
         self.metadata_bytes_sent += bytes;
-    }
-
-    pub fn record_metadata_bytes_received(&mut self, bytes: usize) {
-        self.metadata_bytes_received += bytes;
     }
 
     pub fn record_encode_time(&mut self, duration: Duration) {

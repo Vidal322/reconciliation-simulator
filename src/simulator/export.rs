@@ -21,9 +21,7 @@ pub struct RunSummaryRow {
     pub converged: bool,
     pub target_union_size: usize,
     pub total_state_bytes_sent: usize,
-    pub total_state_bytes_received: usize,
     pub total_metadata_bytes_sent: usize,
-    pub total_metadata_bytes_received: usize,
     pub total_encode_time_ns: u128,
     pub total_decode_time_ns: u128,
     pub total_elements_added: usize,
@@ -50,9 +48,7 @@ impl RunSummaryRow {
             converged: result.converged,
             target_union_size,
             total_state_bytes_sent: result.metrics.total_state_bytes_sent,
-            total_state_bytes_received: result.metrics.total_state_bytes_received,
             total_metadata_bytes_sent: result.metrics.total_metadata_bytes_sent,
-            total_metadata_bytes_received: result.metrics.total_metadata_bytes_received,
             total_encode_time_ns: result.metrics.total_encode_time.as_nanos(),
             total_decode_time_ns: result.metrics.total_decode_time.as_nanos(),
             total_elements_added: result.metrics.total_elements_added,
@@ -60,12 +56,12 @@ impl RunSummaryRow {
     }
 
     pub fn csv_header() -> &'static str {
-        "protocol,topology,num_replicas,set_size,payload_size,digest_bits,divergence,pattern,seed,round_cap,rounds,converged,target_union_size,total_state_bytes_sent,total_state_bytes_received,total_metadata_bytes_sent,total_metadata_bytes_received,total_encode_time_ns,total_decode_time_ns,total_elements_added"
+        "protocol,topology,num_replicas,set_size,payload_size,digest_bits,jaccard_similarity,pattern,seed,round_cap,rounds,converged,target_union_size,total_state_bytes_sent,total_metadata_bytes_sent,total_encode_time_ns,total_decode_time_ns,total_elements_added"
     }
 
     pub fn to_csv_row(&self) -> String {
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             self.protocol,
             self.topology,
             self.num_replicas,
@@ -80,9 +76,7 @@ impl RunSummaryRow {
             self.converged,
             self.target_union_size,
             self.total_state_bytes_sent,
-            self.total_state_bytes_received,
             self.total_metadata_bytes_sent,
-            self.total_metadata_bytes_received,
             self.total_encode_time_ns,
             self.total_decode_time_ns,
             self.total_elements_added
