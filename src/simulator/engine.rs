@@ -175,10 +175,10 @@ impl Simulation {
         // a message to a different sender.
         for replica_id in 0..self.replicas.len() {
             let carry = self.carry_states[replica_id].take();
+            let view = self.replicas[replica_id].view();
             let mut outbox = Outbox::for_replica(&mut self.network, replica_id);
             self.protocol.send_phase(
-                replica_id,
-                &self.replicas[replica_id],
+                view,
                 &self.topology,
                 &mut outbox,
                 carry,
@@ -196,8 +196,7 @@ impl Simulation {
             .enumerate()
             .map(|(replica_id, inbox)| {
                 let result = self.protocol.recv_phase(
-                    replica_id,
-                    &self.replicas[replica_id],
+                    self.replicas[replica_id].view(),
                     &self.topology,
                     inbox,
                 );

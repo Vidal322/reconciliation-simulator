@@ -2,7 +2,7 @@ use crate::simulator::network::{ProtocolMsg, Outbox};
 use crate::simulator::protocols::{
     LocalMetrics, PendingElements, Protocol, ProtocolKind, ProtocolStepResult,
 };
-use crate::simulator::replica::{Element, Replica};
+use crate::simulator::replica::{Element, ReplicaView};
 use crate::simulator::topology::Topology;
 
 /// Agent-target protocol. Initial implementation: full state transfer.
@@ -23,22 +23,20 @@ impl Protocol for MultiReplicaProtocol {
 
     fn send_phase(
         &self,
-        replica_id: usize,
-        local: &Replica,
+        local: ReplicaView<'_>,
         topology: &Topology,
         outbox: &mut Outbox<'_>,
         _carry: Option<PendingElements>,
     ) {
         let payload: Vec<Element> = local.set.iter().cloned().collect();
-        for &neighbor_id in topology.neighbors(replica_id) {
+        for &neighbor_id in topology.neighbors(local.id) {
             outbox.send_elements(neighbor_id, payload.clone());
         }
     }
 
     fn recv_phase(
         &self,
-        _replica_id: usize,
-        local: &Replica,
+        local: ReplicaView<'_>,
         _topology: &Topology,
         inbox: &mut [(usize, ProtocolMsg)],
     ) -> ProtocolStepResult {

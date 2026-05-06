@@ -6,7 +6,7 @@ use crate::simulator::network::{ProtocolMsg, Outbox};
 use crate::simulator::protocols::{
     LocalMetrics, PendingElements, Protocol, ProtocolKind, ProtocolStepResult,
 };
-use crate::simulator::replica::{Element, Replica};
+use crate::simulator::replica::{Element, ReplicaView};
 use crate::simulator::topology::Topology;
 
 /// Two-round RIBLT reconciliation.
@@ -39,8 +39,7 @@ impl Protocol for RibltProtocol {
 
     fn send_phase(
         &self,
-        replica_id: usize,
-        local: &Replica,
+        local: ReplicaView<'_>,
         topology: &Topology,
         outbox: &mut Outbox<'_>,
         carry: Option<PendingElements>,
@@ -49,7 +48,7 @@ impl Protocol for RibltProtocol {
 
         if pending.is_empty() {
             let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
-            for &neighbor_id in topology.neighbors(replica_id) {
+            for &neighbor_id in topology.neighbors(local.id) {
                 let sender_riblt = RatelessIBLT::riblt_from(digests.iter().copied());
                 outbox.send_riblt(neighbor_id, sender_riblt);
             }
@@ -64,8 +63,7 @@ impl Protocol for RibltProtocol {
 
     fn recv_phase(
         &self,
-        _replica_id: usize,
-        local: &Replica,
+        local: ReplicaView<'_>,
         _topology: &Topology,
         inbox: &mut [(usize, ProtocolMsg)],
     ) -> ProtocolStepResult {
@@ -142,7 +140,7 @@ mod tests {
             for id in 0..replicas.len() {
                 let carry = carries[id].take();
                 let mut outbox = Outbox::for_replica(&mut network, id);
-                protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
+                protocol.send_phase(replicas[id].view(), &topology, &mut outbox, carry);
             }
             let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..replicas.len())
                 .map(|id| network.drain_inbox(id))
@@ -151,7 +149,7 @@ mod tests {
                 .iter_mut()
                 .enumerate()
                 .map(|(id, inbox)| {
-                    protocol.recv_phase(id, &replicas[id], &topology, inbox)
+                    protocol.recv_phase(replicas[id].view(), &topology, inbox)
                 })
                 .collect();
             for inbox in &inboxes {
@@ -187,13 +185,13 @@ mod tests {
         for id in 0..replicas.len() {
             let carry = carries[id].take();
             let mut outbox = Outbox::for_replica(&mut network, id);
-            protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
+            protocol.send_phase(replicas[id].view(), &topology, &mut outbox, carry);
         }
         let mut inboxes: Vec<Vec<(usize, ProtocolMsg)>> = (0..replicas.len())
             .map(|id| network.drain_inbox(id))
             .collect();
         for (id, inbox) in inboxes.iter_mut().enumerate() {
-            let result = protocol.recv_phase(id, &replicas[id], &topology, inbox);
+            let result = protocol.recv_phase(replicas[id].view(), &topology, inbox);
             carries[id] = result.carry;
         }
         for inbox in &inboxes {
@@ -209,7 +207,7 @@ mod tests {
         for id in 0..replicas.len() {
             let carry = carries[id].take();
             let mut outbox = Outbox::for_replica(&mut network, id);
-            protocol.send_phase(id, &replicas[id], &topology, &mut outbox, carry);
+            protocol.send_phase(replicas[id].view(), &topology, &mut outbox, carry);
         }
         for id in 0..replicas.len() {
             for (_from, mut msg) in network.drain_inbox(id) {

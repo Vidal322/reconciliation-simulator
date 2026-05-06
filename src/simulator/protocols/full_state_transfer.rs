@@ -2,7 +2,7 @@ use crate::simulator::network::{ProtocolMsg, Outbox};
 use crate::simulator::protocols::{
     LocalMetrics, PendingElements, Protocol, ProtocolKind, ProtocolStepResult,
 };
-use crate::simulator::replica::{Element, Replica};
+use crate::simulator::replica::{Element, ReplicaView};
 use crate::simulator::topology::Topology;
 
 #[derive(Clone, Debug, Default)]
@@ -21,22 +21,20 @@ impl Protocol for FullStateTransfer {
 
     fn send_phase(
         &self,
-        replica_id: usize,
-        local: &Replica,
+        local: ReplicaView<'_>,
         topology: &Topology,
         outbox: &mut Outbox<'_>,
         _carry: Option<PendingElements>,
     ) {
         let payload: Vec<Element> = local.set.iter().cloned().collect();
-        for &neighbor_id in topology.neighbors(replica_id) {
+        for &neighbor_id in topology.neighbors(local.id) {
             outbox.send_elements(neighbor_id, payload.clone());
         }
     }
 
     fn recv_phase(
         &self,
-        _replica_id: usize,
-        local: &Replica,
+        local: ReplicaView<'_>,
         _topology: &Topology,
         inbox: &mut [(usize, ProtocolMsg)],
     ) -> ProtocolStepResult {
@@ -62,6 +60,7 @@ mod tests {
     use super::*;
     use crate::simulator::network::Network;
     use crate::simulator::protocols::test_helpers::make_element;
+    use crate::simulator::replica::Replica;
     use std::collections::HashSet;
 
     fn make_replica(id: usize, elements: Vec<Element>) -> Replica {
@@ -88,7 +87,7 @@ mod tests {
 
         for (id, replica) in replicas.iter().enumerate() {
             let mut outbox = Outbox::for_replica(&mut network, id);
-            protocol.send_phase(id, replica, &topology, &mut outbox, None);
+            protocol.send_phase(replica.view(), &topology, &mut outbox, None);
         }
 
         let expected_node0 = (std::mem::size_of::<u64>() + 4) as u64;
@@ -115,11 +114,11 @@ mod tests {
 
         for (id, replica) in replicas.iter().enumerate() {
             let mut outbox = Outbox::for_replica(&mut network, id);
-            protocol.send_phase(id, replica, &topology, &mut outbox, None);
+            protocol.send_phase(replica.view(), &topology, &mut outbox, None);
         }
 
         let mut inbox_0: Vec<(usize, ProtocolMsg)> = network.drain_inbox(0);
-        let result_0 = protocol.recv_phase(0, &replicas[0], &topology, &mut inbox_0);
+        let result_0 = protocol.recv_phase(replicas[0].view(), &topology, &mut inbox_0);
 
         let digests = result_0
             .next_set

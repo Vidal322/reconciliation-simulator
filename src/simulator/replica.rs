@@ -72,11 +72,19 @@ impl ReplicaStats {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct ReplicaView {
+/// Narrow, borrowed view of a replica passed to protocol methods.
+/// Exposes only what reconciliation logic legitimately needs: the
+/// replica's identity and its current set. Engine-internal fields
+/// (`stats`, `phase`) are invisible to protocols.
+pub struct ReplicaView<'a> {
     pub id: usize,
-    pub set_size: usize,
-    pub digests: Vec<u64>,
+    pub set: &'a HashSet<Element>,
+}
+
+impl<'a> ReplicaView<'a> {
+    pub fn snapshot_set(&self) -> HashSet<Element> {
+        self.set.clone()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -128,12 +136,8 @@ impl Replica {
         self.set.iter().map(|e| e.digest).collect()
     }
 
-    pub fn view(&self) -> ReplicaView {
-        ReplicaView {
-            id: self.id,
-            set_size: self.set.len(),
-            digests: self.snapshot_digests(),
-        }
+    pub fn view(&self) -> ReplicaView<'_> {
+        ReplicaView { id: self.id, set: &self.set }
     }
 
     pub fn set_phase(&mut self, phase: ReplicaPhase) {

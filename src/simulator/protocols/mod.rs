@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::simulator::network::{ProtocolMsg, Outbox};
-use crate::simulator::replica::{Element, Replica};
+use crate::simulator::replica::{Element, ReplicaView};
 use crate::simulator::topology::Topology;
 
 /// Per-replica, cross-round carry state. Produced by `recv_phase` of round N
@@ -47,8 +47,7 @@ pub trait Protocol {
 
     fn send_phase(
         &self,
-        replica_id: usize,
-        local: &Replica,
+        local: ReplicaView<'_>,
         topology: &Topology,
         outbox: &mut Outbox<'_>,
         carry: Option<PendingElements>,
@@ -56,8 +55,7 @@ pub trait Protocol {
 
     fn recv_phase(
         &self,
-        replica_id: usize,
-        local: &Replica,
+        local: ReplicaView<'_>,
         topology: &Topology,
         inbox: &mut [(usize, ProtocolMsg)],
     ) -> ProtocolStepResult;
