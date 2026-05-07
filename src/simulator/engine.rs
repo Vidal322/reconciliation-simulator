@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::simulator::metrics::{MetricsCollector, MetricsSnapshot};
+use crate::simulator::metrics::MetricsSnapshot;
 
 use crate::simulator::protocols::bf_iblt::StaticBfIbltProtocol;
 use crate::simulator::protocols::full_state_transfer::FullStateTransfer;
@@ -33,7 +33,6 @@ pub struct Simulation {
     topology: Topology,
     protocol: Box<dyn Protocol>,
     network: Network<ProtocolMsg>,
-    metrics: MetricsCollector,
     target_union: HashSet<Element>,
     current_round: usize,
     /// Per-replica carry state. `carry_states[i]` holds whatever
@@ -90,7 +89,6 @@ impl Simulation {
             topology,
             protocol,
             network,
-            metrics: MetricsCollector::new(),
             target_union: workload.target_union,
             current_round: 0,
             carry_states: (0..n).map(|_| None).collect(),
@@ -115,7 +113,7 @@ impl Simulation {
         if converged {
             self.mark_converged();
         }
-        let metrics = self.finalize_metrics();
+        let metrics = MetricsSnapshot::from_replicas(&self.replicas, self.current_round);
         SimulationResult {
             rounds: self.current_round,
             num_replicas: self.replicas.len(),
@@ -223,12 +221,6 @@ impl Simulation {
         self.replicas
             .iter()
             .all(|replica| replica.set == self.target_union)
-    }
-
-    fn finalize_metrics(&mut self) -> MetricsSnapshot {
-        self.metrics.set_rounds(self.current_round);
-        self.metrics.record_replicas(&self.replicas);
-        self.metrics.snapshot()
     }
 
     fn mark_active(&mut self) {

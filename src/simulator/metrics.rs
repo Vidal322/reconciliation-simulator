@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -32,82 +31,38 @@ impl MetricsSnapshot {
     pub fn total_bytes_sent(&self) -> usize {
         self.total_state_bytes_sent + self.total_metadata_bytes_sent
     }
-}
 
-#[derive(Clone, Debug, Default)]
-pub struct MetricsCollector {
-    rounds: usize,
-    total_state_bytes_sent: usize,
-    total_metadata_bytes_sent: usize,
-    total_encode_time: Duration,
-    total_decode_time: Duration,
-    total_elements_added: usize,
-    per_node: HashMap<usize, NodeMetrics>,
-}
-
-impl MetricsCollector {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn set_rounds(&mut self, rounds: usize) {
-        self.rounds = rounds;
-    }
-
-    pub fn record_replica(&mut self, replica: &Replica) {
-        let entry = self
-            .per_node
-            .entry(replica.id)
-            .or_insert_with(|| NodeMetrics {
-                replica_id: replica.id,
-                ..Default::default()
-            });
-
-        entry.state_bytes_sent = replica.stats.state_bytes_sent;
-        entry.metadata_bytes_sent = replica.stats.metadata_bytes_sent;
-        entry.encode_time = replica.stats.encode_time;
-        entry.decode_time = replica.stats.decode_time;
-        entry.elements_added = replica.stats.elements_added;
-    }
-
-    pub fn record_replicas(&mut self, replicas: &[Replica]) {
-        self.per_node.clear();
-
-        for replica in replicas {
-            self.record_replica(replica);
-        }
-
-        self.recompute_totals();
-    }
-
-    pub fn snapshot(&self) -> MetricsSnapshot {
-        let mut per_node = self.per_node.values().cloned().collect::<Vec<_>>();
+    /// Build a snapshot directly from replica state. `Replica.stats` is
+    /// the source of truth for per-replica counters; this is a pure
+    /// projection of that source.
+    pub fn from_replicas(replicas: &[Replica], rounds: usize) -> Self {
+        let mut per_node: Vec<NodeMetrics> = replicas
+            .iter()
+            .map(|r| NodeMetrics {
+                replica_id: r.id,
+                state_bytes_sent: r.stats.state_bytes_sent,
+                metadata_bytes_sent: r.stats.metadata_bytes_sent,
+                encode_time: r.stats.encode_time,
+                decode_time: r.stats.decode_time,
+                elements_added: r.stats.elements_added,
+            })
+            .collect();
         per_node.sort_unstable_by_key(|m| m.replica_id);
 
-        MetricsSnapshot {
-            rounds: self.rounds,
-            total_state_bytes_sent: self.total_state_bytes_sent,
-            total_metadata_bytes_sent: self.total_metadata_bytes_sent,
-            total_encode_time: self.total_encode_time,
-            total_decode_time: self.total_decode_time,
-            total_elements_added: self.total_elements_added,
+        let total_state_bytes_sent = per_node.iter().map(|n| n.state_bytes_sent).sum();
+        let total_metadata_bytes_sent = per_node.iter().map(|n| n.metadata_bytes_sent).sum();
+        let total_encode_time = per_node.iter().map(|n| n.encode_time).sum();
+        let total_decode_time = per_node.iter().map(|n| n.decode_time).sum();
+        let total_elements_added = per_node.iter().map(|n| n.elements_added).sum();
+
+        Self {
+            rounds,
+            total_state_bytes_sent,
+            total_metadata_bytes_sent,
+            total_encode_time,
+            total_decode_time,
+            total_elements_added,
             per_node,
-        }
-    }
-
-    fn recompute_totals(&mut self) {
-        self.total_state_bytes_sent = 0;
-        self.total_metadata_bytes_sent = 0;
-        self.total_encode_time = Duration::default();
-        self.total_decode_time = Duration::default();
-        self.total_elements_added = 0;
-
-        for node in self.per_node.values() {
-            self.total_state_bytes_sent += node.state_bytes_sent;
-            self.total_metadata_bytes_sent += node.metadata_bytes_sent;
-            self.total_encode_time += node.encode_time;
-            self.total_decode_time += node.decode_time;
-            self.total_elements_added += node.elements_added;
         }
     }
 }
