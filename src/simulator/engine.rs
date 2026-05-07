@@ -197,6 +197,12 @@ impl Simulation {
             replica.stats.record_encode_time(local_metrics.encode_time);
             replica.stats.record_decode_time(local_metrics.decode_time);
 
+            debug_assert!(
+                next_set.is_superset(&replica.set),
+                "protocol shrunk replica {replica_id}'s set: {} → {} elements",
+                replica.set.len(),
+                next_set.len(),
+            );
             let added = next_set.difference(&replica.set).count();
             replica.stats.record_elements_added(added);
             replica.set = next_set;
