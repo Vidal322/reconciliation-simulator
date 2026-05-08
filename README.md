@@ -141,8 +141,8 @@ cargo run --release --bin eval -- --config agent.toml
 ```
 
 Emits one JSON document on stdout with per-run entries and a summary
-(`mean_bytes`, `std_bytes`, `mean_rounds` per `(topology, jaccard_similarity)`
-cell; scalar `fitness` = sum of cell `mean_bytes`).
+(`mean_bytes`, `std_bytes`, `mean_rounds` per `(topology, jaccard_similarity,
+num_replicas)` cell; scalar `fitness` = geometric mean of cell `mean_bytes`).
 
 ### Tests
 
@@ -230,11 +230,22 @@ Or reference it by name when asking Claude to perform the research loop.
 ### Fitness
 
 ```
-fitness = mean_bytes(Star) + mean_bytes(Tree) + mean_bytes(Chord)
+fitness = geometric_mean( mean_bytes[cell] for cell in matrix )
+        = exp( (1/N) · Σ ln(mean_bytes[cell]) )
 ```
 
-Means are across seeds = `[42, 43, 44]`. Lower is better. A run where
-`all_converged` is false has fitness = 999999999.
+A *cell* is one `(topology, jaccard_similarity, num_replicas)` triple;
+its `mean_bytes` is averaged across `seeds = [42, 43, 44]`. Lower is
+better.
+
+Geometric mean (rather than sum) puts every cell on equal log-scale
+footing — a 10% improvement on the largest cell and a 10% improvement
+on the smallest move fitness by the same amount. This keeps the agent
+from optimising one corner of the matrix at the expense of the others.
+
+The eval binary always emits a numeric fitness; the agent's loop is
+responsible for rejecting any attempt where `all_converged` is false,
+regardless of the number reported.
 
 ---
 
@@ -259,8 +270,8 @@ seed = 42
 ```
 
 The eval binary expands the matrix `topologies × seeds × jaccard_similarities
-× num_replicas` and runs one simulation per cell. Aggregate `fitness` is
-summed over the per-cell `mean_bytes`.
+× num_replicas` and runs one simulation per cell. Aggregate `fitness` is the
+geometric mean of the per-cell `mean_bytes`.
 
 - `seeds` vs `[workload].seed` — outer `seeds` controls simulation randomness
   (one run per seed); inner `workload.seed` seeds workload generation. Kept
