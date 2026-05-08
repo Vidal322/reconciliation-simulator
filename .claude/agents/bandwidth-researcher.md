@@ -17,15 +17,28 @@ different scale.
 
 ## Loop
 
+**Before you start, read `hints.md` in the repo root.** It distils
+lessons from prior agent runs at smaller scales: which architectures
+worked, which optimisations helped, and — critically — which dead-end
+strategies have already been tried and *must not be retried*. Re-read
+it whenever you're stuck; it is your shortest path to a working
+multi-scale protocol.
+
 Repeat indefinitely:
 
-1. **Read** the current `multi_replica.rs` and `experiments.tsv`.
-2. **Hypothesise** a change that should reduce total bytes sent.
+1. **Read** `hints.md`, the current `multi_replica.rs`, and `experiments.tsv`.
+2. **Hypothesise** a change that should reduce total bytes sent. Cross-check
+   against `hints.md` — if you're about to retry something the "do NOT retry"
+   list rules out, pick a different hypothesis.
 3. **Edit** `src/simulator/protocols/multi_replica.rs` (the only file you may edit).
 4. **Commit** your change: `git add src/simulator/protocols/multi_replica.rs && git commit -m "<short description of what you tried>"`.
 5. **Evaluate**: `cargo test 2>/dev/null && cargo run --release --bin eval -- --config agent.toml 2>/dev/null > /tmp/result.json`.
 6. **Parse** the result: read `summary.fitness` and `summary.all_converged` from `/tmp/result.json`. Check `summary.by_cell[*].std_bytes` — if any cell's `std_bytes` exceeds the improvement, the change is noise, not signal.
-7. **Record** the result: append one line to `experiments.tsv` (see format below).
+7. **Record** the result: **ALWAYS** append one line to `experiments.tsv`
+   (see format below). **You MUST log every attempt — both successes AND
+   failures.** Failed attempts with `kept: no` are essential memory to
+   avoid re-exploring dead ends. If build/tests fail, log fitness as
+   `1e30` (a sentinel clearly out of band of any realistic value).
 8. **Decide**:
    - If `all_converged` is true AND the scalar fitness improved, **keep** the commit.
    - Otherwise, **revert**: `git revert --no-edit HEAD`.
@@ -105,16 +118,31 @@ sed 's/^protocol = "MultiReplica"/protocol = "FullStateTransfer"/' agent.toml \
 1. **Only edit** `src/simulator/protocols/multi_replica.rs`. No other files
    (except `experiments.tsv` for logging).
 2. Must implement the `Protocol` trait from `src/simulator/protocols/mod.rs`.
-3. Only use `SendView::send()` in `send_phase` and
-   `RecvView::record_decoded_metadata()` in `recv_phase`.
-4. Must pass `SimulatorHint::None` — no reconstruction shortcuts.
-5. Every field on every `ProtocolMsg` variant is billed by `WireSized`.
-   There is no free data channel.
-6. May use any algorithm in `src/simulator/algorithms/` (RIBLT sketches,
-   Bloom filters, rateless Bloom filters).
-7. May add internal state to `MultiReplicaProtocol`.
-8. `cargo test` must pass after every edit.
-9. All three topologies must converge (`converged: true`).
+   The trait gives you `send_phase(&self, local: ReplicaView<'_>, topology,
+   outbox: &mut Outbox<'_>, carry)` and `recv_phase(&self, local, topology,
+   inbox: &mut [(usize, ProtocolMsg)]) -> ProtocolStepResult`.
+3. To emit messages, call `Outbox::send_elements / send_riblt / send_bloom /
+   send_rateless_bloom / send_bloom_riblt / send_rateless_bloom_riblt`.
+   The `Outbox` is engine-bound to the current replica; you cannot supply
+   a different sender.
+4. To read incoming messages, use the `ProtocolMsg` accessors —
+   `take_elements()`, `as_riblt()`, `as_bloom()`, `as_rateless_bloom()`,
+   `as_bloom_riblt()`, `as_rateless_bloom_riblt()`. There is no way to
+   pattern-match the inner enum from outside `network.rs`.
+5. Every field on every `ProtocolMsg` variant is billed by `WireSized`
+   (`state_bytes` at send time, `metadata_bytes` after recv). There is no
+   free data channel and no reconstruction shortcut.
+6. The set returned in `ProtocolStepResult.next_set` must satisfy
+   `next_set ⊇ local.snapshot_set()` — protocols may only add elements,
+   never remove them. The engine asserts this.
+7. May use any algorithm in `src/simulator/algorithms/` (RIBLT sketches,
+   Bloom filters, rateless Bloom filters, multiparty sketches).
+8. May add internal state to `MultiReplicaProtocol`, but `Protocol`'s
+   methods take `&self`, not `&mut self` — per-replica state must live
+   inside the carry that flows through `recv_phase` → engine → `send_phase`,
+   not on `self`. `self` is shared across all replicas.
+9. `cargo test` must pass after every edit.
+10. All cells in the matrix must converge (`converged: true`).
 
 ---
 
@@ -169,13 +197,15 @@ invent new approaches.
 
 Key files for understanding what's available:
 
-- `src/simulator/protocols/mod.rs` — `Protocol` trait, `ProtocolStepResult`, `LocalMetrics`
-- `src/simulator/protocols/messages.rs` — `ProtocolMsg`, `SimulatorHint`, `WireSized`
-- `src/simulator/network.rs` — `SendView`, `RecvView`, `Network`
-- `src/simulator/replica.rs` — `Element` (digest: u64, payload: Vec<u8>), `Replica`
-- `src/simulator/topology.rs` — `Topology`, `neighbors()`, `edge_count()`
+- `hints.md` — distilled strategy from prior runs (read this first)
+- `src/simulator/protocols/mod.rs` — `Protocol` trait, `ProtocolStepResult`, `LocalMetrics`, `PendingElements` (the carry type)
+- `src/simulator/network.rs` — `Outbox` (send path), `ProtocolMsg` and its accessors, `WireSized`, sealed message wrappers (`RibltMsg`, `BloomMsg`, `RatelessBloomMsg`, …)
+- `src/simulator/replica.rs` — `Element` (digest: u64, payload: Vec<u8>), `Replica`, `ReplicaView` (the borrowed view passed to protocols)
+- `src/simulator/topology.rs` — `Topology`, `neighbors()`, `node_count()`, `kind`
 - `src/simulator/algorithms/riblt/` — RIBLT sketch implementation
 - `src/simulator/algorithms/bloom.rs` — Bloom filter (uses RandomState — not directly serialisable, but the algorithm is reusable)
-- `src/simulator/algorithms/rateless_bloom.rs` — Rateless Bloom filter
-- `src/simulator/protocols/riblt.rs` — existing RIBLT protocol (reference implementation)
+- `src/simulator/algorithms/rateless_bloom/` — Rateless Bloom filter and stopping strategies
+- `src/simulator/algorithms/multiparty_sketch.rs` — finite-field coded sketches that can be added/subtracted along tree paths
+- `src/simulator/protocols/riblt.rs` — existing RIBLT protocol (reference implementation; uses the carry pattern)
 - `src/simulator/protocols/hybrid_rbf_riblt.rs` — existing hybrid protocol (reference)
+- `src/simulator/protocols/full_state_transfer.rs` — minimal reference; current `multi_replica.rs` is a copy of this
