@@ -62,16 +62,38 @@ every replica holds the target union, or when `round_cap` is reached.
 
 ### Network (`src/simulator/network.rs`)
 
-The billing model. `SendView::send()` and `RecvView::record_decoded_metadata()`
-are the only operations that add bytes to a replica's metrics. There is **no
-free data channel** — every field of every `ProtocolMsg` is billed by
-`WireSized`. This is what makes cross-protocol bandwidth comparisons fair.
+The billing model and the trust boundary between protocols and the engine.
+
+- **Send path**: a protocol emits messages through an `Outbox<'_>`, which the
+  engine constructs via `Outbox::for_replica(&mut network, replica_id)` once
+  per replica per round. The `from` field is private and bound at
+  construction; a protocol cannot attribute a message to a different sender.
+- **Wire cost**: every variant of `ProtocolMsg` implements `WireSized`,
+  splitting cost into `state_bytes` (payloads) and `metadata_bytes`
+  (sketches, filters, headers). State is billed at `send` time; metadata is
+  billed by `Network::bill_metadata_post_recv` after `recv_phase` returns,
+  so RIBLT and rateless-Bloom messages report their final wire size after
+  decode-time growth.
+- **Sealed messages**: `RibltMsg`, `BloomMsg`, `RatelessBloomMsg` and the
+  combined wrappers have private constructors. Protocols receive `&mut`
+  references to them but cannot replace one with a freshly built copy that
+  would zero out the billed cost. `#![forbid(unsafe_code)]` at the crate
+  root closes the `ptr::write` escape hatch.
+
+There is **no free data channel** — every field of every `ProtocolMsg` is
+billed. This is what makes cross-protocol bandwidth comparisons fair, and
+what lets the agent target the same fitness scalar without being able to
+cheat it.
 
 ### Metrics (`src/simulator/metrics.rs`)
 
-Per-node and aggregate counters: state bytes sent/received, metadata bytes
-sent/received, encode/decode time, elements added. `SimulationResult`
-exposes both per-node breakdowns and totals.
+Per-node and aggregate counters: state bytes sent, metadata bytes sent,
+encode/decode time, elements added. `MetricsSnapshot::from_replicas`
+projects the per-replica `Replica.stats` (the source of truth) into a
+serialisable snapshot — `Replica.stats` is the only place counters
+accumulate across rounds. `SimulationResult` carries both per-node
+breakdowns and totals; `MetricsSnapshot::total_bytes_sent()` is the scalar
+the eval fitness function consumes.
 
 ### Protocols (`src/simulator/protocols/`)
 
@@ -226,28 +248,35 @@ Means are across seeds = `[42, 43, 44]`. Lower is better. A run where
 protocol = "MultiReplica"
 topologies = ["Star", "Tree", "Chord"]
 seeds = [42, 43, 44]
+jaccard_similarities = [0.25, 0.5, 0.75]
+num_replicas = [16, 64]
 round_cap = 100
 
 [workload]
-num_replicas = 32
 set_size = 10_000
 payload_size = 32
 digest_bits = 64
-jaccard_similarity = 0.5
 pattern = "Uniform"
-universe_size = 200_000
+universe_size = 500_000
 zipf_exponent = 1.0
 seed = 42
 ```
+
+The eval binary expands the matrix `topologies × seeds × jaccard_similarities
+× num_replicas` and runs one simulation per cell. Aggregate `fitness` is
+summed over the per-cell `mean_bytes`.
 
 - `seeds` vs `[workload].seed` — outer `seeds` controls simulation randomness
   (one run per seed); inner `workload.seed` seeds workload generation. Kept
   separate so multi-seed evaluation varies protocol randomness while holding
   the workload fixed.
-- `jaccard_similarity = 0.5` — each replica has ~33% unique elements vs any
-  other replica.
-- `universe_size = 200_000` — must exceed `common_size + n·unique` to avoid
-  sampling exhaustion.
+- `jaccard_similarities` — list, swept per cell. Each entry ≈ how much of
+  any pair of replicas overlaps; lower means a larger union and more rounds
+  to converge.
+- `num_replicas` — list, swept per cell. Drives the per-iteration cost
+  roughly quadratically for full-state-transfer baselines.
+- `universe_size = 500_000` — must exceed `common_size + n·unique` for the
+  largest `num_replicas` value, to avoid sampling exhaustion.
 
 ---
 
@@ -262,7 +291,7 @@ src/
 └── simulator/
     ├── mod.rs
     ├── engine.rs               # simulation loop
-    ├── network.rs              # billing model
+    ├── network.rs              # billing + Outbox + sealed message wrappers
     ├── metrics.rs              # per-node + aggregate counters
     ├── replica.rs              # Element, Replica
     ├── topology.rs             # Star, Tree, Chord
@@ -276,7 +305,6 @@ src/
     │   └── bayesian_estimation.rs
     └── protocols/              # reconciliation protocols
         ├── mod.rs              # Protocol trait, ProtocolKind
-        ├── messages.rs         # ProtocolMsg, WireSized
         ├── full_state_transfer.rs
         ├── riblt.rs
         ├── bf_iblt.rs
