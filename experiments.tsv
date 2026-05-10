@@ -32,3 +32,4 @@ attempt	fitness	all_converged	kept	description
 31	109828613	true	no	late tree fpr 0.32->0.33 — slight REGRESSION; 0.32 confirmed optimal late fpr
 32	109265826	true	no	chord adaptive fpr (0.1 base, 0.15 if set>100K) — slight regression; chord doesn't benefit
 33	109055384	true	no	tree threshold 100K -> 150K — slight regression; 100K confirmed best
+34	110798523	true	no	star adaptive (0.01 base, 0.05 if set>100K) — 2% regression; star prefers static low fpr
