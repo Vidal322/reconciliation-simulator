@@ -27,3 +27,5 @@ attempt	fitness	all_converged	kept	description
 26	1e30	false	no	adaptive tree fpr (0.27 base, 0.4 if set>50K) — Tree N=64 all cells failed convergence (0.4 too aggressive in late rounds)
 27	108483803	true	yes	adaptive tree fpr (0.27 base, 0.32 if set>100K) — 0.6% gain (gentler late-round bump works)
 28	109732966	true	no	adaptive tree fpr threshold 100K -> 50K — 1% REGRESSION (high fpr too early)
+29	(restoration)	-	-	exp29 was bookkeeping commit (kept fpr=0.32, threshold 100K)
+30	1e30	false	no	late tree fpr 0.32->0.35 (threshold 100K) — Tree N=64 J=0.25 all seeds failed
