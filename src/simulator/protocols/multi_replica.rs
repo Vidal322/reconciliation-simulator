@@ -219,17 +219,13 @@ impl Protocol for MultiReplicaProtocol {
                 let skip = tree_idx as usize % deg;
                 for (i, &nbr) in neighbours.iter().enumerate() {
                     if deg > 1 && i == skip {
-                        continue;
+                        // Marker only: keep neighbour in lockstep on idx/phase.
+                        outbox.send_elements(nbr, vec![make_tree_marker(tree_idx, 0)]);
+                    } else {
+                        outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind));
+                        outbox.send_elements(nbr, vec![make_tree_marker(tree_idx, 0)]);
                     }
-                    outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind));
                 }
-                // One marker is enough — send it to the one we'd skip in a
-                // pure pairwise scheme, so the receiver still gets a phase
-                // signal even if we skipped sketching them.
-                outbox.send_elements(
-                    neighbours[skip],
-                    vec![make_tree_marker(tree_idx, 0)],
-                );
             }
             _ => {
                 for &nbr in topology.neighbors(local.id) {
