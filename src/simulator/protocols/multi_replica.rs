@@ -27,18 +27,30 @@ const CHORD_POWER_KEY: usize = usize::MAX;
 /// The chord power counter is persisted in the carry under
 /// `CHORD_POWER_KEY` and updated in `recv_phase` from the observed
 /// sender distance.
-pub struct MultiReplicaProtocol {
-    fpr: f64,
-}
+pub struct MultiReplicaProtocol;
 
 impl MultiReplicaProtocol {
     pub fn new() -> Self {
-        Self { fpr: 0.05 }
+        Self
     }
 
-    fn build_bf(&self, set: &std::collections::HashSet<Element>) -> BloomFilter<u64> {
+    /// FPR per topology. Star converges in ~few rounds, so a low FPR keeps
+    /// it from doubling its round count. Chord/Tree run many rounds anyway,
+    /// so a higher FPR shrinks each BF more than it adds rounds.
+    fn fpr(kind: TopologyKind) -> f64 {
+        match kind {
+            TopologyKind::Star => 0.01,
+            TopologyKind::Chord | TopologyKind::Tree => 0.05,
+        }
+    }
+
+    fn build_bf(
+        &self,
+        set: &std::collections::HashSet<Element>,
+        kind: TopologyKind,
+    ) -> BloomFilter<u64> {
         let n = set.len().max(1);
-        let mut bf: BloomFilter<u64> = BloomFilter::new(n, self.fpr);
+        let mut bf: BloomFilter<u64> = BloomFilter::new(n, Self::fpr(kind));
         for e in set.iter() {
             bf.insert(&e.digest);
         }
@@ -127,14 +139,14 @@ impl Protocol for MultiReplicaProtocol {
                 let fwd = (local.id + dist) % total;
                 let bwd = (local.id + total - dist) % total;
 
-                outbox.send_bloom(fwd, self.build_bf(local.set));
+                outbox.send_bloom(fwd, self.build_bf(local.set, topology.kind));
                 if bwd != fwd && bwd != local.id {
-                    outbox.send_bloom(bwd, self.build_bf(local.set));
+                    outbox.send_bloom(bwd, self.build_bf(local.set, topology.kind));
                 }
             }
             _ => {
                 for &nbr in topology.neighbors(local.id) {
-                    outbox.send_bloom(nbr, self.build_bf(local.set));
+                    outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind));
                 }
             }
         }
