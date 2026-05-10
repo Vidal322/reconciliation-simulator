@@ -29,3 +29,4 @@ attempt	fitness	all_converged	kept	description
 28	109732966	true	no	adaptive tree fpr threshold 100K -> 50K — 1% REGRESSION (high fpr too early)
 29	(restoration)	-	-	exp29 was bookkeeping commit (kept fpr=0.32, threshold 100K)
 30	1e30	false	no	late tree fpr 0.32->0.35 (threshold 100K) — Tree N=64 J=0.25 all seeds failed
+31	109828613	true	no	late tree fpr 0.32->0.33 — slight REGRESSION; 0.32 confirmed optimal late fpr
