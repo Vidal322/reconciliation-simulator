@@ -37,11 +37,21 @@ impl MultiReplicaProtocol {
     /// FPR per topology. Star converges in ~few rounds, so a low FPR keeps
     /// it from doubling its round count. Chord/Tree run many rounds anyway,
     /// so a higher FPR shrinks each BF more than it adds rounds.
-    fn fpr(kind: TopologyKind) -> f64 {
+    /// Tree is also adaptive: once the local set is large (late rounds, near
+    /// union), bump FPR — the BF is then much smaller and most queries are
+    /// FPs anyway, so the extra suppression mostly cancels the elements that
+    /// already arrived from another path (multi-source dedup).
+    fn fpr(kind: TopologyKind, set_len: usize) -> f64 {
         match kind {
-            TopologyKind::Star => 0.005,
+            TopologyKind::Star => 0.01,
             TopologyKind::Chord => 0.1,
-            TopologyKind::Tree => 0.27,
+            TopologyKind::Tree => {
+                if set_len > 50_000 {
+                    0.4
+                } else {
+                    0.27
+                }
+            }
         }
     }
 
@@ -51,7 +61,7 @@ impl MultiReplicaProtocol {
         kind: TopologyKind,
     ) -> BloomFilter<u64> {
         let n = set.len().max(1);
-        let mut bf: BloomFilter<u64> = BloomFilter::new(n, Self::fpr(kind));
+        let mut bf: BloomFilter<u64> = BloomFilter::new(n, Self::fpr(kind, set.len()));
         for e in set.iter() {
             bf.insert(&e.digest);
         }

@@ -23,3 +23,4 @@ attempt	fitness	all_converged	kept	description
 22	110099706	true	no	tree fpr 0.27->0.28 — 1% REGRESSION; 0.27 is sweet spot
 23	(restoration)	-	-	exp23 was bookkeeping commit (restored tree=0.27 from broken 0.28)
 24	109681291	true	no	chord fpr 0.1->0.07 — 0.5% regression; chord 0.1 confirmed
+25	109295136	true	no	star fpr 0.01->0.005 — slight regression; star 0.01 confirmed
