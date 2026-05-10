@@ -41,17 +41,11 @@ impl MultiReplicaProtocol {
     /// union), bump FPR — the BF is then much smaller and most queries are
     /// FPs anyway, so the extra suppression mostly cancels the elements that
     /// already arrived from another path (multi-source dedup).
-    fn fpr(kind: TopologyKind, set_len: usize) -> f64 {
+    fn fpr(kind: TopologyKind, _set_len: usize) -> f64 {
         match kind {
             TopologyKind::Star => 0.01,
             TopologyKind::Chord => 0.1,
-            TopologyKind::Tree => {
-                if set_len > 50_000 {
-                    0.4
-                } else {
-                    0.27
-                }
-            }
+            TopologyKind::Tree => 0.27,
         }
     }
 
