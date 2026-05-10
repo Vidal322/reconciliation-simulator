@@ -11,3 +11,4 @@ attempt	fitness	all_converged	kept	description
 10	123136399	true	no	pure RIBLT for Chord pairwise — 9% REGRESSION (Chord meta 3.7x bigger; RIBLT consumes ~1.5*diff symbols which exceeds BF cost even after ascending-order shrinkage)
 11	114886075	true	no	tree fpr 0.1->0.07 — 1.5% REGRESSION (confirms 0.1 sweet spot)
 12	114508429	true	no	star fpr 0.01->0.02 — 1.2% REGRESSION (confirms 0.01 sweet spot)
+13	1e30	false	no	tree 50% hash-suppression on sends — DID NOT CONVERGE (Tree cells all hit round_cap=100, element starvation)
