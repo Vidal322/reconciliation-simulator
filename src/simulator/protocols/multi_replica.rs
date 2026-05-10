@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::simulator::algorithms::bloom::BloomFilter;
-use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::{ProtocolMsg, Outbox};
 use crate::simulator::protocols::{
     LocalMetrics, PendingElements, Protocol, ProtocolKind, ProtocolStepResult,
@@ -141,10 +140,9 @@ impl Protocol for MultiReplicaProtocol {
                 let fwd = (local.id + dist) % total;
                 let bwd = (local.id + total - dist) % total;
 
-                let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
-                outbox.send_riblt(fwd, RatelessIBLT::riblt_from(digests.iter().copied()));
+                outbox.send_bloom(fwd, self.build_bf(local.set, topology.kind));
                 if bwd != fwd && bwd != local.id {
-                    outbox.send_riblt(bwd, RatelessIBLT::riblt_from(digests.iter().copied()));
+                    outbox.send_bloom(bwd, self.build_bf(local.set, topology.kind));
                 }
             }
             _ => {
@@ -189,27 +187,6 @@ impl Protocol for MultiReplicaProtocol {
                     .set
                     .iter()
                     .filter(|e| !bf.contains(&e.digest))
-                    .cloned()
-                    .collect();
-                if !to_send.is_empty() {
-                    pending.entry(*from).or_default().extend(to_send);
-                }
-                continue;
-            }
-
-            if let Some(riblt) = msg.as_riblt() {
-                saw_sketch = true;
-                let local_digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
-                let mut local_riblt: RatelessIBLT<u64> =
-                    RatelessIBLT::riblt_from(local_digests.iter().copied());
-                riblt.decode_against(&mut local_riblt);
-
-                let local_only: std::collections::HashSet<u64> =
-                    riblt.remote_only().into_iter().collect();
-                let to_send: Vec<Element> = local
-                    .set
-                    .iter()
-                    .filter(|e| local_only.contains(&e.digest))
                     .cloned()
                     .collect();
                 if !to_send.is_empty() {
