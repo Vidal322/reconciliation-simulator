@@ -59,11 +59,8 @@ impl MultiReplicaProtocol {
                 // dominates Star metadata. Use a higher FPR for the hub
                 // ONLY when its set is large (post-gather), so its BF
                 // shrinks without inflating early-round Star round count.
-                if sender_id == 0 && set_len > 100_000 {
-                    0.03
-                } else {
-                    0.01
-                }
+                let _ = (sender_id, set_len);
+                0.01
             }
             TopologyKind::Chord => 0.1,
             TopologyKind::Tree => {
