@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::simulator::algorithms::bloom::BloomFilter;
+use crate::simulator::algorithms::riblt::RatelessIBLT;
 use crate::simulator::network::{ProtocolMsg, Outbox};
 use crate::simulator::protocols::{
     LocalMetrics, PendingElements, Protocol, ProtocolKind, ProtocolStepResult,
@@ -13,16 +14,21 @@ use crate::simulator::topology::{Topology, TopologyKind};
 /// the delivery loop in send_phase.
 const CHORD_POWER_KEY: usize = usize::MAX;
 
-/// Topology-dispatched BloomFilter reconciliation.
+/// Topology-dispatched reconciliation.
 ///
-/// * Star, Tree: each node sketches its current set to every neighbour
-///   per sketch round. Receivers identify the elements the sender lacks
-///   and send them back as Elements in the next delivery round.
-/// * Chord: pairwise distance-doubling. Each sketch round, every node
-///   sketches only the neighbours at distance 2^p (forward and backward)
-///   where p cycles 0..floor(log2(N)). Ascending order ensures nearby
-///   elements are absorbed before distant pairs reconcile, drastically
-///   shrinking later sketch metadata.
+/// * Star, Tree: each node sketches its current set to every neighbour as
+///   `(BloomFilter, RatelessIBLT)`. The receiver uses the BF to split its own
+///   digests into "definitely-missing-from-sender" (not in BF) and "likely-
+///   common" (in BF), then decodes the sender's RIBLT against a RIBLT built
+///   from the likely-common set. The decode confirms which "likely-common"
+///   were in fact BF false positives that the sender actually lacks, and
+///   together with the definitely-missing set forms an exact list of elements
+///   the receiver should ship to the sender. No FPR residuals → far fewer
+///   rounds than pure BF.
+/// * Chord: pairwise distance-doubling with pure BF (no RIBLT). Each sketch
+///   round, every node sketches only the neighbours at distance 2^p (forward
+///   and backward) where p cycles 0..floor(log2(N)). Ascending order ensures
+///   nearby elements are absorbed before distant pairs reconcile.
 ///
 /// The chord power counter is persisted in the carry under
 /// `CHORD_POWER_KEY` and updated in `recv_phase` from the observed
@@ -56,6 +62,10 @@ impl MultiReplicaProtocol {
             bf.insert(&e.digest);
         }
         bf
+    }
+
+    fn build_riblt(set: &std::collections::HashSet<Element>) -> RatelessIBLT<u64> {
+        RatelessIBLT::riblt_from(set.iter().map(|e| e.digest))
     }
 
     fn read_chord_power(carry: &PendingElements) -> usize {
@@ -147,7 +157,9 @@ impl Protocol for MultiReplicaProtocol {
             }
             _ => {
                 for &nbr in topology.neighbors(local.id) {
-                    outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind));
+                    let bf = self.build_bf(local.set, topology.kind);
+                    let riblt = Self::build_riblt(local.set);
+                    outbox.send_bloom_riblt(nbr, bf, riblt);
                 }
             }
         }
@@ -181,6 +193,7 @@ impl Protocol for MultiReplicaProtocol {
                 continue;
             }
 
+            // Chord: pure BF.
             if let Some(bf) = msg.as_bloom() {
                 saw_sketch = true;
                 let to_send: Vec<Element> = local
@@ -196,6 +209,48 @@ impl Protocol for MultiReplicaProtocol {
                     if let Some(p) = Self::chord_distance_power(total, local.id, *from) {
                         observed_power = Some(p);
                     }
+                }
+                continue;
+            }
+
+            // Star/Tree: BF+RIBLT hybrid.
+            if let Some((bf, riblt)) = msg.as_bloom_riblt() {
+                saw_sketch = true;
+
+                let mut definitely_missing: Vec<Element> = Vec::new();
+                let mut common_digests: Vec<u64> = Vec::new();
+                for e in local.set.iter() {
+                    if bf.contains(&e.digest) {
+                        common_digests.push(e.digest);
+                    } else {
+                        definitely_missing.push(e.clone());
+                    }
+                }
+
+                // RIBLT decode against common candidates: any "common" digest
+                // that the sender's RIBLT does not actually carry is a BF
+                // false positive — the sender truly lacks it, so the receiver
+                // should ship it.
+                let mut fp_corrections: std::collections::HashSet<u64> =
+                    std::collections::HashSet::new();
+                if !common_digests.is_empty() {
+                    let mut common_riblt: RatelessIBLT<u64> =
+                        RatelessIBLT::riblt_from(common_digests.iter().copied());
+                    riblt.decode_against(&mut common_riblt);
+                    fp_corrections.extend(riblt.remote_only());
+                }
+
+                let mut to_send: Vec<Element> = definitely_missing;
+                if !fp_corrections.is_empty() {
+                    for e in local.set.iter() {
+                        if fp_corrections.contains(&e.digest) {
+                            to_send.push(e.clone());
+                        }
+                    }
+                }
+
+                if !to_send.is_empty() {
+                    pending.entry(*from).or_default().extend(to_send);
                 }
             }
         }
