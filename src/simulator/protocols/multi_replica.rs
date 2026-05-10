@@ -211,9 +211,25 @@ impl Protocol for MultiReplicaProtocol {
                 if neighbours.is_empty() {
                     return;
                 }
-                let target = neighbours[tree_idx as usize % neighbours.len()];
-                outbox.send_bloom(target, self.build_bf(local.set, topology.kind));
-                outbox.send_elements(target, vec![make_tree_marker(tree_idx, 0)]);
+                let deg = neighbours.len();
+                // Skip-one-neighbour: sketch all neighbours EXCEPT
+                // neighbours[idx % deg]. Provides partial multi-source dedup
+                // (each pair sketched (deg-1)/deg of rounds, vs always with
+                // all-neighbour) while keeping propagation fast.
+                let skip = tree_idx as usize % deg;
+                for (i, &nbr) in neighbours.iter().enumerate() {
+                    if deg > 1 && i == skip {
+                        continue;
+                    }
+                    outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind));
+                }
+                // One marker is enough — send it to the one we'd skip in a
+                // pure pairwise scheme, so the receiver still gets a phase
+                // signal even if we skipped sketching them.
+                outbox.send_elements(
+                    neighbours[skip],
+                    vec![make_tree_marker(tree_idx, 0)],
+                );
             }
             _ => {
                 for &nbr in topology.neighbors(local.id) {

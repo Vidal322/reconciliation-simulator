@@ -36,3 +36,6 @@ attempt	fitness	all_converged	kept	description
 35	109438885	true	no	tree threshold 100K -> 120K — slight regression; 100K confirmed optimal
 36	109346409	true	no	late tree fpr 0.32->0.30 (threshold 100K) — slight regression; 0.32 confirmed
 37	1e30	false	no	tree PAIRWISE edge-cycling — dedup HUGE (state -30%, meta -68%) but rounds=100 (no convergence); pairwise needs more cycles than cap allows at fpr=0.27
+38	1e30	false	no	tree pairwise + fpr 0.05 — still no convergence (slow propagation, all cells round_cap)
+39	1e30	false	no	tree pairwise + fpr 0.15 — even N=16 doesn't converge; fundamental rounds limit on pairwise
+40	1e30	false	no	tree pairwise + fpr 0.10 — same all hit round_cap=100
