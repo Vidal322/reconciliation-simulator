@@ -40,7 +40,7 @@ impl MultiReplicaProtocol {
     fn fpr(kind: TopologyKind) -> f64 {
         match kind {
             TopologyKind::Star => 0.01,
-            TopologyKind::Chord => 0.1,
+            TopologyKind::Chord => 0.07,
             TopologyKind::Tree => 0.27,
         }
     }
