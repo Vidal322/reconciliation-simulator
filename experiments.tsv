@@ -8,3 +8,4 @@ attempt	fitness	all_converged	kept	description
 7	113637073	true	yes	bump tree fpr 0.05->0.1 — 2% gain (smaller tree BFs outweigh extra rounds)
 8	117452172	true	no	BF+RIBLT for Star/Tree — 3% REGRESSION (rounds halved but state grew: exact decode sends every needed element with no FP-skipping, more duplicates)
 9	113095466	true	yes	bump chord fpr 0.05->0.1 — 0.5% gain (near noise)
+10	123136399	true	no	pure RIBLT for Chord pairwise — 9% REGRESSION (Chord meta 3.7x bigger; RIBLT consumes ~1.5*diff symbols which exceeds BF cost even after ascending-order shrinkage)
