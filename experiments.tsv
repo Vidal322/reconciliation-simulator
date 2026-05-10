@@ -42,3 +42,4 @@ attempt	fitness	all_converged	kept	description
 41	1e30	false	no	tree skip-one with markers (only to skipped neighbour) — broke lockstep (parent at idx 0 always skipped); reverted
 42	1e30	false	no	tree skip-one with markers to ALL — still broke convergence; abandoned skip-one approach
 43	108895114	true	yes	revert all pairwise/skip-one; restored exp27 baseline (best 108.5M-108.9M range)
+44	109915130	true	no	tree 3-level adaptive (0.27/0.32/0.34 at 100K/150K) — regression; 2 levels enough
