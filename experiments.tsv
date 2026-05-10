@@ -2,3 +2,4 @@ attempt	fitness	all_converged	kept	description
 1	1e30	false	no	rateless BF+RIBLT multi-round: eval killed after 51min (too slow for N=64)
 2	162799142	true	no	pure RIBLT multi-round, symmetric all-neighbor sketch (REVERTED but per rule should have been KEPT — 65% under FST 459M baseline)
 3	162726783	true	yes	BF-only (fpr=0.01) multi-round all-neighbor sketch — kept (improves vs FST 459M; ~matches reverted exp2 RIBLT 162.8M)
+4	120781831	true	yes	topology-dispatched: Chord pairwise distance-doubling BF asc, Star/Tree all-neighbor BF — 26% under exp3 (Chord cells halved)
