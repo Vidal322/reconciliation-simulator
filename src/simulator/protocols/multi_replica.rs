@@ -57,7 +57,9 @@ impl MultiReplicaProtocol {
             TopologyKind::Star => 0.01,
             TopologyKind::Chord => 0.1,
             TopologyKind::Tree => {
-                if set_len > 100_000 {
+                if set_len > 150_000 {
+                    0.34
+                } else if set_len > 100_000 {
                     0.32
                 } else {
                     0.27

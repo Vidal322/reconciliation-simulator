@@ -39,3 +39,6 @@ attempt	fitness	all_converged	kept	description
 38	1e30	false	no	tree pairwise + fpr 0.05 — still no convergence (slow propagation, all cells round_cap)
 39	1e30	false	no	tree pairwise + fpr 0.15 — even N=16 doesn't converge; fundamental rounds limit on pairwise
 40	1e30	false	no	tree pairwise + fpr 0.10 — same all hit round_cap=100
+41	1e30	false	no	tree skip-one with markers (only to skipped neighbour) — broke lockstep (parent at idx 0 always skipped); reverted
+42	1e30	false	no	tree skip-one with markers to ALL — still broke convergence; abandoned skip-one approach
+43	108895114	true	yes	revert all pairwise/skip-one; restored exp27 baseline (best 108.5M-108.9M range)
