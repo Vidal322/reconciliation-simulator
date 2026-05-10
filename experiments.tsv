@@ -15,3 +15,4 @@ attempt	fitness	all_converged	kept	description
 14	1e30	false	no	tree 50% RANDOM suppression — STATE DROPPED 23% but still didn't converge in 100 rounds (multi-hop propagation too slow at 50% per round)
 15	1e30	false	no	tree 25% random suppression — STILL no convergence (rounds=99.67 for J=0.25); accumulated drops over depth-6 tree exhaust 100-round cap
 16	111894660	true	yes	tree fpr 0.1->0.15 — 1% gain (more FP-suppression cuts state slightly, smaller BFs offset extra rounds)
+17	110480622	true	yes	tree fpr 0.15->0.2 — 1.3% gain (continuing FP-suppression sweet-spot search)
