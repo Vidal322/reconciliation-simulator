@@ -75,7 +75,7 @@ impl MultiReplicaProtocol {
         match kind {
             TopologyKind::Star => 0.01,
             TopologyKind::Chord => 0.1,
-            TopologyKind::Tree => 0.05,
+            TopologyKind::Tree => 0.15,
         }
     }
 
