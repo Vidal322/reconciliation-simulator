@@ -35,3 +35,4 @@ attempt	fitness	all_converged	kept	description
 34	110798523	true	no	star adaptive (0.01 base, 0.05 if set>100K) — 2% regression; star prefers static low fpr
 35	109438885	true	no	tree threshold 100K -> 120K — slight regression; 100K confirmed optimal
 36	109346409	true	no	late tree fpr 0.32->0.30 (threshold 100K) — slight regression; 0.32 confirmed
+37	1e30	false	no	tree PAIRWISE edge-cycling — dedup HUGE (state -30%, meta -68%) but rounds=100 (no convergence); pairwise needs more cycles than cap allows at fpr=0.27
