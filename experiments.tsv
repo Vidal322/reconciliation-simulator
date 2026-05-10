@@ -6,3 +6,4 @@ attempt	fitness	all_converged	kept	description
 5	117116405	true	yes	bump fpr 0.01->0.05 globally — 3% gain net (Tree/Chord meta drops outweigh Star meta regression from doubled rounds)
 6	115872074	true	yes	per-topology fpr (Star=0.01 Chord/Tree=0.05) — 1% gain restoring Star efficiency
 7	113637073	true	yes	bump tree fpr 0.05->0.1 — 2% gain (smaller tree BFs outweigh extra rounds)
+8	117452172	true	no	BF+RIBLT for Star/Tree — 3% REGRESSION (rounds halved but state grew: exact decode sends every needed element with no FP-skipping, more duplicates)
