@@ -62,7 +62,14 @@ impl MultiReplicaProtocol {
                 let _ = (sender_id, set_len);
                 0.01
             }
-            TopologyKind::Chord => 0.1,
+            TopologyKind::Chord => {
+                let _ = sender_id;
+                if set_len > 100_000 {
+                    0.15
+                } else {
+                    0.1
+                }
+            }
             TopologyKind::Tree => {
                 if set_len > 100_000 {
                     0.32
