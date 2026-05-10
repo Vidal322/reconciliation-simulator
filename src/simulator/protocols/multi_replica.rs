@@ -33,7 +33,7 @@ pub struct MultiReplicaProtocol {
 
 impl MultiReplicaProtocol {
     pub fn new() -> Self {
-        Self { fpr: 0.01 }
+        Self { fpr: 0.05 }
     }
 
     fn build_bf(&self, set: &std::collections::HashSet<Element>) -> BloomFilter<u64> {
