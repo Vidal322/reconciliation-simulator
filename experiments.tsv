@@ -34,3 +34,4 @@ attempt	fitness	all_converged	kept	description
 33	109055384	true	no	tree threshold 100K -> 150K — slight regression; 100K confirmed best
 34	110798523	true	no	star adaptive (0.01 base, 0.05 if set>100K) — 2% regression; star prefers static low fpr
 35	109438885	true	no	tree threshold 100K -> 120K — slight regression; 100K confirmed optimal
+36	109346409	true	no	late tree fpr 0.32->0.30 (threshold 100K) — slight regression; 0.32 confirmed
