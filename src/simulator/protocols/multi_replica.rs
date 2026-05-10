@@ -183,10 +183,30 @@ impl Protocol for MultiReplicaProtocol {
 
             if let Some(bf) = msg.as_bloom() {
                 saw_sketch = true;
+                let is_tree = topology.kind == TopologyKind::Tree;
+                let set_len_mix = (local.set.len() as u64)
+                    .wrapping_mul(0x94D049BB133111EB);
+                let from_mix = (*from as u64).wrapping_mul(0xBF58476D1CE4E5B9);
                 let to_send: Vec<Element> = local
                     .set
                     .iter()
                     .filter(|e| !bf.contains(&e.digest))
+                    .filter(|e| {
+                        if !is_tree {
+                            return true;
+                        }
+                        // Tree-only hash suppression: each element has ~50%
+                        // chance of being sent this round. Multi-source dupes
+                        // (X at multiple of receiver's neighbours, all
+                        // simultaneously decide to send) get cut roughly in
+                        // half. Misses are caught next round when set.len() →
+                        // different hash bucket selection.
+                        let h = e.digest
+                            .wrapping_mul(0x9E3779B97F4A7C15)
+                            .wrapping_add(from_mix)
+                            .wrapping_add(set_len_mix);
+                        h & 1 == 0
+                    })
                     .cloned()
                     .collect();
                 if !to_send.is_empty() {
