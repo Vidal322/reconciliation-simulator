@@ -39,8 +39,8 @@ impl MultiReplicaProtocol {
     /// so a higher FPR shrinks each BF more than it adds rounds.
     fn fpr(kind: TopologyKind) -> f64 {
         match kind {
-            TopologyKind::Star => 0.01,
-            TopologyKind::Chord => 0.07,
+            TopologyKind::Star => 0.005,
+            TopologyKind::Chord => 0.1,
             TopologyKind::Tree => 0.27,
         }
     }
