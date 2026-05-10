@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hash, Hasher};
 
 use crate::simulator::algorithms::bloom::BloomFilter;
 use crate::simulator::network::{ProtocolMsg, Outbox};
@@ -185,34 +183,12 @@ impl Protocol for MultiReplicaProtocol {
 
             if let Some(bf) = msg.as_bloom() {
                 saw_sketch = true;
-                let is_tree = topology.kind == TopologyKind::Tree;
-                let to_send: Vec<Element> = if is_tree {
-                    // Tree dedup: random suppression at ~50%. With avg ~3
-                    // simultaneous holders sending the same element to a
-                    // common receiver, this halves multi-source dupes; misses
-                    // are caught next round (fresh RandomState each call →
-                    // non-deterministic, no permanent starvation).
-                    let rs = RandomState::new();
-                    local
-                        .set
-                        .iter()
-                        .filter(|e| !bf.contains(&e.digest))
-                        .filter(|e| {
-                            let mut h = rs.build_hasher();
-                            e.digest.hash(&mut h);
-                            (*from as u64).hash(&mut h);
-                            h.finish() & 1 == 0
-                        })
-                        .cloned()
-                        .collect()
-                } else {
-                    local
-                        .set
-                        .iter()
-                        .filter(|e| !bf.contains(&e.digest))
-                        .cloned()
-                        .collect()
-                };
+                let to_send: Vec<Element> = local
+                    .set
+                    .iter()
+                    .filter(|e| !bf.contains(&e.digest))
+                    .cloned()
+                    .collect();
                 if !to_send.is_empty() {
                     pending.entry(*from).or_default().extend(to_send);
                 }
