@@ -44,3 +44,4 @@ attempt	fitness	all_converged	kept	description
 43	108895114	true	yes	revert all pairwise/skip-one; restored exp27 baseline (best 108.5M-108.9M range)
 44	109915130	true	no	tree 3-level adaptive (0.27/0.32/0.34 at 100K/150K) — regression; 2 levels enough
 45	110045854	true	no	tree base 0.27->0.25 — regression; 0.27 base confirmed
+46	113227970	true	no	star hub-fpr 0.05 (leaves 0.01) — 4% regression; rounds doubled (9->17) on Star, meta blew up

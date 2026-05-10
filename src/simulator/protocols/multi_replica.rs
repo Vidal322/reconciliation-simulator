@@ -56,11 +56,11 @@ impl MultiReplicaProtocol {
         match kind {
             TopologyKind::Star => {
                 // Hub (id=0) has the largest set in late rounds — its BF
-                // dominates Star metadata. Use a higher FPR for the hub so
-                // its BF shrinks; leaves stay at low FPR (their BFs are
-                // small, and low FPR keeps Star round count low).
-                if sender_id == 0 {
-                    0.05
+                // dominates Star metadata. Use a higher FPR for the hub
+                // ONLY when its set is large (post-gather), so its BF
+                // shrinks without inflating early-round Star round count.
+                if sender_id == 0 && set_len > 100_000 {
+                    0.03
                 } else {
                     0.01
                 }
