@@ -8,25 +8,55 @@ use crate::simulator::protocols::{
 use crate::simulator::replica::{Element, ReplicaView};
 use crate::simulator::topology::{Topology, TopologyKind};
 
-/// Sentinel key in the carry map that stores the chord power counter.
-/// `usize::MAX` is never a valid neighbour id, so this slot is invisible to
-/// the delivery loop in send_phase.
+/// Sentinel keys in the carry map. `usize::MAX` and `usize::MAX-1` are never
+/// valid neighbour ids, so these slots are invisible to the delivery loop.
 const CHORD_POWER_KEY: usize = usize::MAX;
+const TREE_IDX_KEY: usize = usize::MAX - 1;
 
-/// Topology-dispatched BloomFilter reconciliation.
+fn is_sentinel_key(k: usize) -> bool {
+    k == CHORD_POWER_KEY || k == TREE_IDX_KEY
+}
+
+/// Markers are zero-payload Elements (workload always uses `payload_size > 0`,
+/// so empty payload uniquely identifies a protocol-internal marker). Digest
+/// encodes (idx, phase): bits[1..] = idx, bit[0] = phase (0=sketch, 1=deliver).
+fn make_tree_marker(idx: u64, phase: u8) -> Element {
+    Element {
+        digest: (idx << 1) | (phase as u64 & 1),
+        payload: Vec::new(),
+    }
+}
+
+fn parse_tree_marker(e: &Element) -> Option<(u64, u8)> {
+    if e.payload.is_empty() {
+        Some((e.digest >> 1, (e.digest & 1) as u8))
+    } else {
+        None
+    }
+}
+
+/// Topology-dispatched reconciliation.
 ///
-/// * Star, Tree: each node sketches its current set to every neighbour
-///   per sketch round. Receivers identify the elements the sender lacks
-///   and send them back as Elements in the next delivery round.
+/// * Star: each node sketches its current set to every neighbour per sketch
+///   round. Receivers identify the elements the sender lacks and send them
+///   back as Elements in the next delivery round.
 /// * Chord: pairwise distance-doubling. Each sketch round, every node
 ///   sketches only the neighbours at distance 2^p (forward and backward)
 ///   where p cycles 0..floor(log2(N)). Ascending order ensures nearby
-///   elements are absorbed before distant pairs reconcile, drastically
-///   shrinking later sketch metadata.
+///   elements are absorbed before distant pairs reconcile.
+/// * Tree: pairwise edge-cycling. Each sketch round every node sketches a
+///   single neighbour selected by `neighbours[idx % deg]`, with idx bumped
+///   each (sketch, deliver) cycle. Temporal separation eliminates the
+///   multi-source duplicate sends that plague all-neighbour Tree
+///   sketching: when several neighbours of B all hold the same X, only the
+///   one B currently selects sees B's BF in this round, so only one ships
+///   X — by the next time another holder is selected, B already has X in
+///   its BF and the redundant send is filtered out.
 ///
-/// The chord power counter is persisted in the carry under
-/// `CHORD_POWER_KEY` and updated in `recv_phase` from the observed
-/// sender distance.
+/// Per-replica state (chord power, tree idx) lives under sentinel keys in
+/// the carry. The tree idx is reconstructed in `recv_phase` from a small
+/// zero-payload "marker" Element that travels alongside each sketch /
+/// delivery; lockstep among neighbours keeps everyone's idx aligned.
 pub struct MultiReplicaProtocol;
 
 impl MultiReplicaProtocol {
@@ -86,6 +116,24 @@ impl MultiReplicaProtocol {
         );
     }
 
+    fn read_tree_idx(carry: &PendingElements) -> u64 {
+        carry
+            .get(&TREE_IDX_KEY)
+            .and_then(|v| v.first())
+            .map(|e| e.digest)
+            .unwrap_or(0)
+    }
+
+    fn write_tree_idx(carry: &mut PendingElements, idx: u64) {
+        carry.insert(
+            TREE_IDX_KEY,
+            vec![Element {
+                digest: idx,
+                payload: Vec::new(),
+            }],
+        );
+    }
+
     fn chord_powers(node_count: usize) -> usize {
         if node_count <= 1 {
             return 1;
@@ -122,16 +170,25 @@ impl Protocol for MultiReplicaProtocol {
     ) {
         let pending = carry.unwrap_or_default();
         let chord_power = Self::read_chord_power(&pending);
+        let tree_idx = Self::read_tree_idx(&pending);
         let has_real_pending = pending
             .iter()
-            .any(|(k, v)| *k != CHORD_POWER_KEY && !v.is_empty());
+            .any(|(k, v)| !is_sentinel_key(*k) && !v.is_empty());
 
         if has_real_pending {
+            let is_tree = topology.kind == TopologyKind::Tree;
             for (nbr, elements) in pending {
-                if nbr == CHORD_POWER_KEY {
+                if is_sentinel_key(nbr) {
                     continue;
                 }
-                if !elements.is_empty() {
+                if elements.is_empty() {
+                    continue;
+                }
+                if is_tree {
+                    let mut elements = elements;
+                    elements.push(make_tree_marker(tree_idx, 1));
+                    outbox.send_elements(nbr, elements);
+                } else {
                     outbox.send_elements(nbr, elements);
                 }
             }
@@ -155,6 +212,15 @@ impl Protocol for MultiReplicaProtocol {
                     outbox.send_bloom(bwd, self.build_bf(local.set, topology.kind));
                 }
             }
+            TopologyKind::Tree => {
+                let neighbours = topology.neighbors(local.id);
+                if neighbours.is_empty() {
+                    return;
+                }
+                let target = neighbours[tree_idx as usize % neighbours.len()];
+                outbox.send_bloom(target, self.build_bf(local.set, topology.kind));
+                outbox.send_elements(target, vec![make_tree_marker(tree_idx, 0)]);
+            }
             _ => {
                 for &nbr in topology.neighbors(local.id) {
                     outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind));
@@ -174,15 +240,27 @@ impl Protocol for MultiReplicaProtocol {
         let mut saw_sketch = false;
         let mut saw_elements = false;
         let mut observed_power: Option<usize> = None;
+        let mut observed_tree_marker: Option<(u64, u8)> = None;
         let total = topology.node_count();
         let is_chord = topology.kind == TopologyKind::Chord;
+        let is_tree = topology.kind == TopologyKind::Tree;
 
         for (from, msg) in inbox.iter_mut() {
             if let Some(els) = msg.take_elements() {
+                let mut got_data = false;
                 for e in els {
+                    if is_tree {
+                        if let Some((idx, phase)) = parse_tree_marker(&e) {
+                            observed_tree_marker = Some((idx, phase));
+                            continue;
+                        }
+                    }
                     next_set.insert(e);
+                    got_data = true;
                 }
-                saw_elements = true;
+                if got_data {
+                    saw_elements = true;
+                }
                 if is_chord {
                     if let Some(p) = Self::chord_distance_power(total, local.id, *from) {
                         observed_power = Some(p);
@@ -219,6 +297,15 @@ impl Protocol for MultiReplicaProtocol {
                 (None, _, _) => 0,                       // empty inbox → restart
             };
             Self::write_chord_power(&mut pending, next_power);
+        }
+
+        if is_tree {
+            let next_idx = match observed_tree_marker {
+                Some((idx, 0)) => idx,           // sketch round just ended → deliver next at same idx
+                Some((idx, _)) => idx + 1,       // deliver round just ended → advance idx for next sketch
+                None => 0,                        // empty inbox → restart
+            };
+            Self::write_tree_idx(&mut pending, next_idx);
         }
 
         ProtocolStepResult {
