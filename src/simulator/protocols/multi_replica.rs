@@ -52,15 +52,25 @@ impl MultiReplicaProtocol {
     /// union), bump FPR — the BF is then much smaller and most queries are
     /// FPs anyway, so the extra suppression mostly cancels the elements that
     /// already arrived from another path (multi-source dedup).
-    fn fpr(kind: TopologyKind, set_len: usize) -> f64 {
+    fn fpr(kind: TopologyKind, set_len: usize, sender_id: usize) -> f64 {
         match kind {
-            TopologyKind::Star => 0.01,
+            TopologyKind::Star => {
+                // Hub (id=0) has the largest set in late rounds — its BF
+                // dominates Star metadata. Use a higher FPR for the hub so
+                // its BF shrinks; leaves stay at low FPR (their BFs are
+                // small, and low FPR keeps Star round count low).
+                if sender_id == 0 {
+                    0.05
+                } else {
+                    0.01
+                }
+            }
             TopologyKind::Chord => 0.1,
             TopologyKind::Tree => {
                 if set_len > 100_000 {
                     0.32
                 } else {
-                    0.25
+                    0.27
                 }
             }
         }
@@ -70,9 +80,10 @@ impl MultiReplicaProtocol {
         &self,
         set: &std::collections::HashSet<Element>,
         kind: TopologyKind,
+        sender_id: usize,
     ) -> BloomFilter<u64> {
         let n = set.len().max(1);
-        let mut bf: BloomFilter<u64> = BloomFilter::new(n, Self::fpr(kind, set.len()));
+        let mut bf: BloomFilter<u64> = BloomFilter::new(n, Self::fpr(kind, set.len(), sender_id));
         for e in set.iter() {
             bf.insert(&e.digest);
         }
@@ -162,19 +173,19 @@ impl Protocol for MultiReplicaProtocol {
                 let fwd = (local.id + dist) % total;
                 let bwd = (local.id + total - dist) % total;
 
-                outbox.send_bloom(fwd, self.build_bf(local.set, topology.kind));
+                outbox.send_bloom(fwd, self.build_bf(local.set, topology.kind, local.id));
                 if bwd != fwd && bwd != local.id {
-                    outbox.send_bloom(bwd, self.build_bf(local.set, topology.kind));
+                    outbox.send_bloom(bwd, self.build_bf(local.set, topology.kind, local.id));
                 }
             }
             TopologyKind::Tree => {
                 for &nbr in topology.neighbors(local.id) {
-                    outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind));
+                    outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind, local.id));
                 }
             }
             _ => {
                 for &nbr in topology.neighbors(local.id) {
-                    outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind));
+                    outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind, local.id));
                 }
             }
         }
