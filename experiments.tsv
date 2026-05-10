@@ -20,3 +20,4 @@ attempt	fitness	all_converged	kept	description
 19	1e30	false	no	tree fpr 0.25->0.3 — Tree J=0.25 N=64 seed 44 hit round_cap=100; fpr=0.3 too aggressive
 20	109726247	true	no	chord fpr 0.1->0.15 — flat (~noise); chord doesn't benefit from same FP-suppression as tree
 21	109095690	true	yes	tree fpr 0.25->0.27 — 0.5% gain (still room above 0.25)
+22	110099706	true	no	tree fpr 0.27->0.28 — 1% REGRESSION; 0.27 is sweet spot
