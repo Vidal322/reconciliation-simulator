@@ -198,13 +198,10 @@ impl Protocol for MultiReplicaProtocol {
                         .iter()
                         .filter(|e| !bf.contains(&e.digest))
                         .filter(|e| {
-                            // Drop ~25% of pending sends. Lighter than 50%
-                            // (which broke convergence in exp14) but still
-                            // cuts a meaningful slice of multi-source dupes.
                             let mut h = rs.build_hasher();
                             e.digest.hash(&mut h);
                             (*from as u64).hash(&mut h);
-                            (h.finish() & 0b11) != 0
+                            h.finish() & 1 == 0
                         })
                         .cloned()
                         .collect()
