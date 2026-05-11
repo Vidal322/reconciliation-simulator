@@ -199,19 +199,8 @@ impl Protocol for MultiReplicaProtocol {
                 }
             }
             TopologyKind::Tree => {
-                let use_riblt = local.set.len() > 100_000;
                 for &nbr in topology.neighbors(local.id) {
-                    let bf = self.build_bf(local.set, topology.kind, local.id);
-                    if use_riblt {
-                        let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
-                        let riblt =
-                            crate::simulator::algorithms::riblt::RatelessIBLT::riblt_from(
-                                digests.iter().copied(),
-                            );
-                        outbox.send_bloom_riblt(nbr, bf, riblt);
-                    } else {
-                        outbox.send_bloom(nbr, bf);
-                    }
+                    outbox.send_bloom(nbr, self.build_bf(local.set, topology.kind, local.id));
                 }
             }
             _ => {
