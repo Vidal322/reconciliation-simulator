@@ -1,1 +1,64 @@
 attempt	fitness	all_converged	kept	description
+1	1e30	false	no	rateless BF+RIBLT multi-round: eval killed after 51min (too slow for N=64)
+2	162799142	true	no	pure RIBLT multi-round, symmetric all-neighbor sketch (REVERTED but per rule should have been KEPT — 65% under FST 459M baseline)
+3	162726783	true	yes	BF-only (fpr=0.01) multi-round all-neighbor sketch — kept (improves vs FST 459M; ~matches reverted exp2 RIBLT 162.8M)
+4	120781831	true	yes	topology-dispatched: Chord pairwise distance-doubling BF asc, Star/Tree all-neighbor BF — 26% under exp3 (Chord cells halved)
+5	117116405	true	yes	bump fpr 0.01->0.05 globally — 3% gain net (Tree/Chord meta drops outweigh Star meta regression from doubled rounds)
+6	115872074	true	yes	per-topology fpr (Star=0.01 Chord/Tree=0.05) — 1% gain restoring Star efficiency
+7	113637073	true	yes	bump tree fpr 0.05->0.1 — 2% gain (smaller tree BFs outweigh extra rounds)
+8	117452172	true	no	BF+RIBLT for Star/Tree — 3% REGRESSION (rounds halved but state grew: exact decode sends every needed element with no FP-skipping, more duplicates)
+9	113095466	true	yes	bump chord fpr 0.05->0.1 — 0.5% gain (near noise)
+10	123136399	true	no	pure RIBLT for Chord pairwise — 9% REGRESSION (Chord meta 3.7x bigger; RIBLT consumes ~1.5*diff symbols which exceeds BF cost even after ascending-order shrinkage)
+11	114886075	true	no	tree fpr 0.1->0.07 — 1.5% REGRESSION (confirms 0.1 sweet spot)
+12	114508429	true	no	star fpr 0.01->0.02 — 1.2% REGRESSION (confirms 0.01 sweet spot)
+13	1e30	false	no	tree 50% hash-suppression on sends (deterministic) — DID NOT CONVERGE (Tree cells all hit round_cap=100, deterministic starvation when set.len() stabilizes)
+14	1e30	false	no	tree 50% RANDOM suppression — STATE DROPPED 23% but still didn't converge in 100 rounds (multi-hop propagation too slow at 50% per round)
+15	1e30	false	no	tree 25% random suppression — STILL no convergence (rounds=99.67 for J=0.25); accumulated drops over depth-6 tree exhaust 100-round cap
+16	111894660	true	yes	tree fpr 0.1->0.15 — 1% gain (more FP-suppression cuts state slightly, smaller BFs offset extra rounds)
+17	110480622	true	yes	tree fpr 0.15->0.2 — 1.3% gain (continuing FP-suppression sweet-spot search)
+18	109655923	true	yes	tree fpr 0.2->0.25 — 0.7% gain (slowing but still improving)
+19	1e30	false	no	tree fpr 0.25->0.3 — Tree J=0.25 N=64 seed 44 hit round_cap=100; fpr=0.3 too aggressive
+20	109726247	true	no	chord fpr 0.1->0.15 — flat (~noise); chord doesn't benefit from same FP-suppression as tree
+21	109095690	true	yes	tree fpr 0.25->0.27 — 0.5% gain (still room above 0.25)
+22	110099706	true	no	tree fpr 0.27->0.28 — 1% REGRESSION; 0.27 is sweet spot
+23	(restoration)	-	-	exp23 was bookkeeping commit (restored tree=0.27 from broken 0.28)
+24	109681291	true	no	chord fpr 0.1->0.07 — 0.5% regression; chord 0.1 confirmed
+25	109295136	true	no	star fpr 0.01->0.005 — slight regression; star 0.01 confirmed
+26	1e30	false	no	adaptive tree fpr (0.27 base, 0.4 if set>50K) — Tree N=64 all cells failed convergence (0.4 too aggressive in late rounds)
+27	108483803	true	yes	adaptive tree fpr (0.27 base, 0.32 if set>100K) — 0.6% gain (gentler late-round bump works)
+28	109732966	true	no	adaptive tree fpr threshold 100K -> 50K — 1% REGRESSION (high fpr too early)
+29	(restoration)	-	-	exp29 was bookkeeping commit (kept fpr=0.32, threshold 100K)
+30	1e30	false	no	late tree fpr 0.32->0.35 (threshold 100K) — Tree N=64 J=0.25 all seeds failed
+31	109828613	true	no	late tree fpr 0.32->0.33 — slight REGRESSION; 0.32 confirmed optimal late fpr
+32	109265826	true	no	chord adaptive fpr (0.1 base, 0.15 if set>100K) — slight regression; chord doesn't benefit
+33	109055384	true	no	tree threshold 100K -> 150K — slight regression; 100K confirmed best
+34	110798523	true	no	star adaptive (0.01 base, 0.05 if set>100K) — 2% regression; star prefers static low fpr
+35	109438885	true	no	tree threshold 100K -> 120K — slight regression; 100K confirmed optimal
+36	109346409	true	no	late tree fpr 0.32->0.30 (threshold 100K) — slight regression; 0.32 confirmed
+37	1e30	false	no	tree PAIRWISE edge-cycling — dedup HUGE (state -30%, meta -68%) but rounds=100 (no convergence); pairwise needs more cycles than cap allows at fpr=0.27
+38	1e30	false	no	tree pairwise + fpr 0.05 — still no convergence (slow propagation, all cells round_cap)
+39	1e30	false	no	tree pairwise + fpr 0.15 — even N=16 doesn't converge; fundamental rounds limit on pairwise
+40	1e30	false	no	tree pairwise + fpr 0.10 — same all hit round_cap=100
+41	1e30	false	no	tree skip-one with markers (only to skipped neighbour) — broke lockstep (parent at idx 0 always skipped); reverted
+42	1e30	false	no	tree skip-one with markers to ALL — still broke convergence; abandoned skip-one approach
+43	108895114	true	yes	revert all pairwise/skip-one; restored exp27 baseline (best 108.5M-108.9M range)
+44	109915130	true	no	tree 3-level adaptive (0.27/0.32/0.34 at 100K/150K) — regression; 2 levels enough
+45	110045854	true	no	tree base 0.27->0.25 — regression; 0.27 base confirmed
+46	113227970	true	no	star hub-fpr 0.05 (leaves 0.01) — 4% regression; rounds doubled (9->17) on Star, meta blew up
+47	110461192	true	no	star hub adaptive 0.03 if hub_set>100K — 1% regression
+48	(restoration)	-	-	exp48 was bookkeeping (revert star hub adaptive)
+49	108964208	true	yes	chord adaptive (0.1 base, 0.15 if set>100K) — flat (~noise) but small win
+50	108805876	true	yes	chord adaptive late 0.15->0.13 — flat (~noise)
+51	108629249	true	yes	tree adaptive 0.27/0.30 thresh 80K — flat (~noise)
+52	109725701	true	no	combo of tree (0.27/0.32 thresh 100K) + chord adaptive — REGRESSION; exp51 settings preferred
+53	(restoration)	-	-	exp53 was bookkeeping (restored exp51)
+54	109369434	true	no	tree late 0.30->0.29 — slight regression
+55	108593981	true	yes	tree threshold 80K->70K (late 0.30) — flat (noise)
+56	110326574	true	no	tree threshold 70K->60K — regression; 70-80K range optimal
+57	(restoration)	-	-	exp57 was bookkeeping (restored 70K)
+58	109570116	true	no	tree late 0.30->0.31 (with thresh 70K) — slight regression
+59	(restoration)	-	-	exp59 was bookkeeping (revert tree late to 0.30)
+60	108676996	true	yes	chord BF+RIBLT for late rounds (set>100K) — ~flat (small improvement on chord cells)
+61	110811291	true	no	chord BF+RIBLT threshold 100K -> 50K — regression; 100K best
+62	(restoration)	-	-	exp62 was bookkeeping (chord BF+RIBLT threshold restored to 100K)
+63	109080384	true	no	tree BF+RIBLT for late rounds (set>100K) — slight regression; user-stopped here
