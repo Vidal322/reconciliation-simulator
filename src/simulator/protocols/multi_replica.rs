@@ -179,7 +179,7 @@ impl Protocol for MultiReplicaProtocol {
                 // Late rounds (large set): pair diffs are tiny (FP residuals).
                 // Pair BF+RIBLT with RIBLT decoding away the FP residuals,
                 // saving the extra cycles needed for FP-only cleanup.
-                let use_riblt = local.set.len() > 50_000;
+                let use_riblt = local.set.len() > 100_000;
                 let mut send = |target: usize| {
                     let bf = self.build_bf(local.set, topology.kind, local.id);
                     if use_riblt {

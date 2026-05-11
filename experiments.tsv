@@ -59,3 +59,4 @@ attempt	fitness	all_converged	kept	description
 58	109570116	true	no	tree late 0.30->0.31 (with thresh 70K) — slight regression
 59	(restoration)	-	-	exp59 was bookkeeping (revert tree late to 0.30)
 60	108676996	true	yes	chord BF+RIBLT for late rounds (set>100K) — ~flat (small improvement on chord cells)
+61	110811291	true	no	chord BF+RIBLT threshold 100K -> 50K — regression; 100K best
