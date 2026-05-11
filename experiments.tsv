@@ -51,3 +51,5 @@ attempt	fitness	all_converged	kept	description
 50	108805876	true	yes	chord adaptive late 0.15->0.13 — flat (~noise)
 51	108629249	true	yes	tree adaptive 0.27/0.30 thresh 80K — flat (~noise)
 52	109725701	true	no	combo of tree (0.27/0.32 thresh 100K) + chord adaptive — REGRESSION; exp51 settings preferred
+53	(restoration)	-	-	exp53 was bookkeeping (restored exp51)
+54	109369434	true	no	tree late 0.30->0.29 — slight regression
