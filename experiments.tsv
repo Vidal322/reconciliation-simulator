@@ -49,3 +49,4 @@ attempt	fitness	all_converged	kept	description
 48	(restoration)	-	-	exp48 was bookkeeping (revert star hub adaptive)
 49	108964208	true	yes	chord adaptive (0.1 base, 0.15 if set>100K) — flat (~noise) but small win
 50	108805876	true	yes	chord adaptive late 0.15->0.13 — flat (~noise)
+51	108629249	true	yes	tree adaptive 0.27/0.30 thresh 80K — flat (~noise)
