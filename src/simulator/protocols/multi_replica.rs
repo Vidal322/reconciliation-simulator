@@ -176,10 +176,26 @@ impl Protocol for MultiReplicaProtocol {
                 let dist = 1usize << p;
                 let fwd = (local.id + dist) % total;
                 let bwd = (local.id + total - dist) % total;
-
-                outbox.send_bloom(fwd, self.build_bf(local.set, topology.kind, local.id));
+                // Late rounds (large set): pair diffs are tiny (FP residuals).
+                // Pair BF+RIBLT with RIBLT decoding away the FP residuals,
+                // saving the extra cycles needed for FP-only cleanup.
+                let use_riblt = local.set.len() > 100_000;
+                let mut send = |target: usize| {
+                    let bf = self.build_bf(local.set, topology.kind, local.id);
+                    if use_riblt {
+                        let digests: Vec<u64> = local.set.iter().map(|e| e.digest).collect();
+                        let riblt =
+                            crate::simulator::algorithms::riblt::RatelessIBLT::riblt_from(
+                                digests.iter().copied(),
+                            );
+                        outbox.send_bloom_riblt(target, bf, riblt);
+                    } else {
+                        outbox.send_bloom(target, bf);
+                    }
+                };
+                send(fwd);
                 if bwd != fwd && bwd != local.id {
-                    outbox.send_bloom(bwd, self.build_bf(local.set, topology.kind, local.id));
+                    send(bwd);
                 }
             }
             TopologyKind::Tree => {
@@ -231,6 +247,49 @@ impl Protocol for MultiReplicaProtocol {
                     .filter(|e| !bf.contains(&e.digest))
                     .cloned()
                     .collect();
+                if !to_send.is_empty() {
+                    pending.entry(*from).or_default().extend(to_send);
+                }
+                if is_chord {
+                    if let Some(p) = Self::chord_distance_power(total, local.id, *from) {
+                        observed_power = Some(p);
+                    }
+                }
+                continue;
+            }
+
+            if let Some((bf, riblt)) = msg.as_bloom_riblt() {
+                saw_sketch = true;
+                let mut definitely_missing: Vec<Element> = Vec::new();
+                let mut common_digests: Vec<u64> = Vec::new();
+                for e in local.set.iter() {
+                    if bf.contains(&e.digest) {
+                        common_digests.push(e.digest);
+                    } else {
+                        definitely_missing.push(e.clone());
+                    }
+                }
+
+                let mut fp_corrections: std::collections::HashSet<u64> =
+                    std::collections::HashSet::new();
+                if !common_digests.is_empty() {
+                    let mut common_riblt: crate::simulator::algorithms::riblt::RatelessIBLT<u64> =
+                        crate::simulator::algorithms::riblt::RatelessIBLT::riblt_from(
+                            common_digests.iter().copied(),
+                        );
+                    riblt.decode_against(&mut common_riblt);
+                    fp_corrections.extend(riblt.remote_only());
+                }
+
+                let mut to_send: Vec<Element> = definitely_missing;
+                if !fp_corrections.is_empty() {
+                    for e in local.set.iter() {
+                        if fp_corrections.contains(&e.digest) {
+                            to_send.push(e.clone());
+                        }
+                    }
+                }
+
                 if !to_send.is_empty() {
                     pending.entry(*from).or_default().extend(to_send);
                 }
