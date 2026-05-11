@@ -55,3 +55,5 @@ attempt	fitness	all_converged	kept	description
 54	109369434	true	no	tree late 0.30->0.29 — slight regression
 55	108593981	true	yes	tree threshold 80K->70K (late 0.30) — flat (noise)
 56	110326574	true	no	tree threshold 70K->60K — regression; 70-80K range optimal
+57	(restoration)	-	-	exp57 was bookkeeping (restored 70K)
+58	109570116	true	no	tree late 0.30->0.31 (with thresh 70K) — slight regression
