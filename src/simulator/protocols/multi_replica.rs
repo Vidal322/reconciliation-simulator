@@ -71,8 +71,8 @@ impl MultiReplicaProtocol {
                 }
             }
             TopologyKind::Tree => {
-                if set_len > 100_000 {
-                    0.32
+                if set_len > 80_000 {
+                    0.30
                 } else {
                     0.27
                 }
