@@ -1,20 +1,28 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// A set element. Carries the 8-byte `digest` (its identity) and the
+/// `payload_len` — the size of the application payload it stands for. The
+/// payload *content* is never inspected by the simulator (only its length
+/// feeds `wire_size`), so storing the length instead of the bytes keeps the
+/// byte accounting identical while making `Element` a 16-byte `Copy` value
+/// with no per-element heap allocation. That matters at scale: at n=64 every
+/// replica converges to the full union, so the set storage is
+/// O(replicas x union) — holding real payload Vecs there exhausted memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Element {
     pub digest: u64,
-    pub payload: Vec<u8>,
+    pub payload_len: usize,
 }
 
 impl Element {
-    pub fn new(digest: u64, payload: Vec<u8>) -> Self {
-        Self { digest, payload }
+    pub fn new(digest: u64, payload_len: usize) -> Self {
+        Self { digest, payload_len }
     }
 
     /// Serialised byte size: 8-byte digest + payload bytes.
     pub fn wire_size(&self) -> usize {
-        std::mem::size_of::<u64>() + self.payload.len()
+        std::mem::size_of::<u64>() + self.payload_len
     }
 }
 

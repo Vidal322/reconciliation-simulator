@@ -73,13 +73,13 @@ mod tests {
         let protocol = FullStateTransfer::new();
         let topology = Topology::star(2);
         let replicas = vec![
-            make_replica(0, vec![make_element(1, 1, 4)]),
+            make_replica(0, vec![make_element(1, 4)]),
             make_replica(
                 1,
                 vec![
-                    make_element(1, 1, 4),
-                    make_element(2, 2, 10),
-                    make_element(3, 3, 6),
+                    make_element(1, 4),
+                    make_element(2, 10),
+                    make_element(3, 6),
                 ],
             ),
         ];
@@ -107,8 +107,8 @@ mod tests {
         let protocol = FullStateTransfer::new();
         let topology = Topology::star(2);
         let replicas = vec![
-            make_replica(0, vec![make_element(1, 1, 4), make_element(2, 2, 4)]),
-            make_replica(1, vec![make_element(2, 2, 4), make_element(3, 3, 4)]),
+            make_replica(0, vec![make_element(1, 4), make_element(2, 4)]),
+            make_replica(1, vec![make_element(2, 4), make_element(3, 4)]),
         ];
         let mut network: Network<ProtocolMsg> = Network::from_topology(&topology);
 

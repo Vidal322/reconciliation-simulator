@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::simulator::replica::Element;
 
-const PAYLOAD_PADDING: &str = "payloadPadding";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DivergencePattern {
     Uniform,
@@ -133,21 +131,11 @@ fn build_universe(config: &WorkloadConfig) -> Vec<Element> {
 
 fn make_element(id: usize, payload_size: usize, digest_bits: usize) -> Element {
     let digest = masked_digest(id as u64, digest_bits);
-    let payload = deterministic_payload(id as u64, payload_size);
-    Element::new(digest, payload)
-}
-
-fn deterministic_payload(id: u64, payload_size: usize) -> Vec<u8> {
-    let mut seed_hasher = std::collections::hash_map::DefaultHasher::new();
-    id.hash(&mut seed_hasher);
-    PAYLOAD_PADDING.hash(&mut seed_hasher); // Domain Separator
-    let seed = seed_hasher.finish();
-
-    let mut rng = StdRng::seed_from_u64(seed);
-    let mut payload = vec![0u8; payload_size];
-    use rand::Rng;
-    rng.fill_bytes(&mut payload);
-    payload
+    // The payload content is never inspected (only its length feeds
+    // `wire_size`), so we record the length directly instead of allocating
+    // `payload_size` bytes per element. The digest is a pure function of
+    // `id`, so the generated workload is byte-identical to before.
+    Element::new(digest, payload_size)
 }
 
 fn masked_digest(value: u64, digest_bits: usize) -> u64 {
