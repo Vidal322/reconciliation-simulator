@@ -28,14 +28,13 @@ struct EvalWorkload {
     pattern: DivergencePattern,
     universe_size: usize,
     zipf_exponent: f64,
-    seed: u64,
     cluster_count: Option<usize>,
     jaccard_inter: Option<f64>,
     jaccard_intra: Option<f64>,
 }
 
 impl EvalWorkload {
-    fn to_workload(&self, jaccard_similarity: f64, num_replicas: usize) -> WorkloadConfig {
+    fn to_workload(&self, jaccard_similarity: f64, num_replicas: usize, seed: u64) -> WorkloadConfig {
         WorkloadConfig {
             num_replicas,
             set_size: self.set_size,
@@ -43,7 +42,7 @@ impl EvalWorkload {
             digest_bits: self.digest_bits,
             jaccard_similarity,
             pattern: self.pattern,
-            seed: self.seed,
+            seed,
             universe_size: self.universe_size,
             zipf_exponent: self.zipf_exponent,
             cluster_count: self.cluster_count,
@@ -106,7 +105,7 @@ fn create_run_entry(
         protocol: eval_config.protocol,
         workload: eval_config
             .workload
-            .to_workload(jaccard_index, num_replicas),
+            .to_workload(jaccard_index, num_replicas, seed),
     };
     let mut sim = Simulation::new(sim_config);
     let result = sim.run();

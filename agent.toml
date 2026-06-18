@@ -12,4 +12,3 @@ digest_bits = 64
 pattern = "Uniform"
 universe_size = 500_000
 zipf_exponent = 1.0
-seed = 42
