@@ -1,7 +1,7 @@
-use super::bloom::BloomFilter;
+use super::bloom::{seeded_hashers, BloomFilter, SeededState};
 use std::{
     cmp::max,
-    hash::{Hash, RandomState},
+    hash::Hash,
     mem,
     time::{Duration, Instant},
 };
@@ -73,12 +73,17 @@ where
     }
 
     pub fn extend(&mut self) {
-        let mut filter = BloomFilter::from_raw_parts(self.m, 1);
+        // Each slice must use independent hash functions so it catches
+        // different false positives than its predecessors; derive them
+        // deterministically from the slice index.
+        let index = self.bloom_filters.len() as u64;
+        let mut filter =
+            BloomFilter::from_raw_parts_with_hashers(self.m, 1, seeded_hashers(index));
         self.data.iter().for_each(|d| filter.insert(d));
         self.bloom_filters.push(filter);
     }
 
-    pub fn extend_with_hashers(&mut self, hashers: [RandomState; 2]) {
+    pub fn extend_with_hashers(&mut self, hashers: [SeededState; 2]) {
         let mut filter = BloomFilter::from_raw_parts_with_hashers(self.m, 1, hashers);
         self.data.iter().for_each(|d| filter.insert(d));
         self.bloom_filters.push(filter);
